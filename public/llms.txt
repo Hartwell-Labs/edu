@@ -1,0 +1,55 @@
+# Anvil — interactive labs (https://edu.hartwell-labs.pl)
+
+> Hartwell Labs' interactive platform: cybersecurity, Python, Ruby and Rust. Write code, it runs in your
+> browser (Python through WebAssembly), and the checker tells you which test failed. Labs that need a real
+> machine run in the downloadable lab VM. No accounts, no tracking, first ten labs free.
+Generated 2026-10-15. Machine-readable task manifest: https://edu.hartwell-labs.pl/api/manifest
+
+## Pages
+
+- [Home](https://edu.hartwell-labs.pl/): tracks, how it works, the lab VM
+- [Lab](https://edu.hartwell-labs.pl/lab): the runner — pick a track, write code, run it
+- [Lab VM](https://edu.hartwell-labs.pl/lab-vm/README.md): the downloadable virtual machine for systems labs
+- [Build script](https://edu.hartwell-labs.pl/lab-vm/build.sh): builds the image or runs it in host mode
+- [Task manifest](https://edu.hartwell-labs.pl/api/manifest): every task as JSON
+
+## Execution model
+
+| Executor | Meaning | Where it runs |
+|---|---|---|
+| `pyodide` | Python in WebAssembly | learner's browser, runtime served from this domain |
+| `quiz` | one correct answer, no code | browser |
+| `vm` | needs kernel, network or compiler | downloaded lab VM, verified locally by `labcheck` |
+
+## Tasks
+
+### Cybersecurity
+
+- **Wykryj próbę wstrzyknięcia** (`py-04-sqli`, difficulty 3, 180 pts, free) — Dostajesz część zapytania HTTP. Uzupełnij `is_injection`, żeby zwracała `True`, gdy wartość wygląda na próbę SQL injection: `' OR`, `" OR`, `UNION SEL
+- **Zamaskuj numer karty w logu** (`rb-02-redact`, difficulty 2, 140 pts, free) — Maska numerów kart to realna robota w logach i zgłoszeniach, więc ten lab startuje w pobranej maszynie wirtualnej.
+- **Nazwij technikę z logu** (`sec-01-technique`, difficulty 2, 120 pts, free) — Fragment logu WAF z Twojego środowiska:
+- **Uruchom usługę z złą flagą (lab VM)** (`vm-01-insecure-flag`, difficulty 3, 200 pts, free) — Ta seria labów potrzebuje prawdziwego Linuksa, sieci i procesu, którego nie da się zasymulować w karcie przeglądarki. Ściągnij obraz lab VM (link na s
+- **Napisz własny skaner z ShadowScan** (`sec-l1-webscan`, difficulty 5, 600 pts, **beyond the free tier**) — Zadanie z pełnej ścieżki: budujesz skaner, który potrafi zrobić coś więcej niż CyberForge w wersji publicznej — respektuje limit requestów, nie zgaduj
+
+### Python
+
+- **Zrób z logu struktury** (`py-01-authlog`, difficulty 1, 100 pts, free) — Linia logu ma format `IP - - [ts] "METHOD path" status`. Uzupełnij `parse_line`, żeby zwracała krotkę `(ip, method, status)` z `int` dla statusu. Pust
+- **Zweryfikuj sumę kontrolną** (`py-02-digest`, difficulty 2, 120 pts, free) — Masz bajty pliku i oczekiwany digest. Uzupełnij `sha256_hex`, żeby zwracała hexdigest. **Uwaga na pułapkę**: `int(digest, 16)` bez ograniczeń przestaś
+- **Trzy warstwy szyfrowania** (`py-03-decoder`, difficulty 2, 150 pts, free) — Zonkayload to base64, pod nim ROT13, pod tym znak po znaku. Uzupełnij `decode_blob`, żeby zwracała odszyfrowany tekst. Uwaga: `base64.b64decode` potrz
+- **Async skaner portów bez zgadywania** (`py-l1-async`, difficulty 5, 700 pts, **beyond the free tier**) — Pełna ścieżka: `asyncio` + ograniczenie współbieżności, poprawny timeout i raport w JSON. W wersji darmowej zbliżasz się do tego zadaniem `py-04-sqli`
+
+### Ruby
+
+- **Enumerable tam, gdzie pętla** (`rb-01-enumerable`, difficulty 2, 130 pts, free) — Ta ścieżka wymaga prawdziwego interpretera, więc w v1 laby Rubiego prowadzą w pobranej maszynie wirtualnej.
+
+### Rust
+
+- **Przewiduj wyjście: ownership** (`rs-01-predict`, difficulty 3, 160 pts, free) — Rust nie kompiluje się w przeglądarce, ale kompilator nadal jest najlepszym nauczycielem ownership. Który z tych programów **wkompiluje się**?
+- **Przeczytaj komunikat borrow checkera** (`rs-02-panic`, difficulty 4, 180 pts, free) — W lab VM dostajesz taki błąd:
+- **Bezpieczne FFI do eBPF** (`rs-l1-ffi`, difficulty 5, 900 pts, **beyond the free tier**) — Pisanie bezpiecznego wrappera na `bpf_probe_read_user` i walidacja buforów — materiał na poziomie talus-process-monitor, z realnymi testami i porównan
+
+## Licensing
+
+- Labs are MIT licensed unless a task says otherwise.
+- Pricing: no public price list. Free tier covers the first ten labs; beyond that we agree case by case.
+- Contact: contact@hartwell-labs.pl

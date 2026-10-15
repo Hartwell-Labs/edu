@@ -1,0 +1,5 @@
+node_modules/
+.wrangler/
+public/lab-vm/root/
+public/lab-vm/*.qcow2
+public/lab-vm/*.iso

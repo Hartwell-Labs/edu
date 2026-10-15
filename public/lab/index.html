@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lab · Anvil — interactive labs for security, Python, Ruby and Rust</title>
+<meta name="description" content="Write code, run it in your browser, see which test failed. Cybersecurity, Python, Ruby and Rust labs." />
+<meta name="theme-color" content="#0a0e14" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<link rel="icon" type="image/svg+xml" href="https://hartwell-labs.pl/assets/favicon.svg" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+<header>
+  <div class="container header-in">
+    <a class="logo" href="/">
+      <svg width="22" height="22" viewBox="0 0 46 46" aria-hidden="true"><path d="M23,2 L42,13 L42,33 L23,44 L4,33 L4,13 Z" fill="none" stroke="#4f46e5" stroke-width="3.4" stroke-linejoin="round"/><polyline points="13,26 19,26 22,17 26,29 29,24 33,24" fill="none" stroke="#4f46e5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Anvil <span style="color:var(--txt-3);font-weight:500">· lab</span>
+    </a>
+    <nav class="main">
+      <a href="/">Home</a>
+      <a href="/llms.txt">llms.txt</a>
+    </nav>
+    <a class="header-cta" href="/#vm">Lab VM</a>
+  </div>
+</header>
+
+<div class="lab">
+  <aside class="lab-side" id="side"></aside>
+  <main class="lab-main" id="main"></main>
+</div>
+
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

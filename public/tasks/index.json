@@ -1,0 +1,262 @@
+{
+  "generated": "2026-10-15",
+  "site": "https://edu.hartwell-labs.pl",
+  "notes": [
+    "Wykonawcy: pyodide (Python w WASM), opal (Ruby w JS), vm (pobrana maszyna wirtualna), quiz.",
+    "W v1 testy lecą do przeglądarki razem z zadaniem — to świadomy wybór: interpreter działa u ucznia, bez serwera.",
+    "Testy sprawdzają wynik, nie wzorzec tekstu w kodzie. Zadania 'quiz' mają jedną poprawną odpowiedź.",
+    "Wykonawcy w v1: pyodide (Python w przeglądarce) oraz vm (pobrana maszyna wirtualna). Ruby i Rust wykonują się w lab VM; interpreter Ruby w przeglądarce (Opal / ruby.wasm) jest następny krok."
+  ],
+  "tracks": [
+    {
+      "id": "security",
+      "label": "Cybersecurity",
+      "executor": "quiz+vm"
+    },
+    {
+      "id": "python",
+      "label": "Python",
+      "executor": "pyodide"
+    },
+    {
+      "id": "ruby",
+      "label": "Ruby",
+      "executor": "opal"
+    },
+    {
+      "id": "rust",
+      "label": "Rust",
+      "executor": "quiz+vm"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "py-01-authlog",
+      "track": "python",
+      "title": "Zrób z logu struktury",
+      "difficulty": 1,
+      "free": true,
+      "points": 100,
+      "executor": "pyodide",
+      "brief": "Linia logu ma format `IP - - [ts] \"METHOD path\" status`. Uzupełnij `parse_line`, żeby zwracała krotkę `(ip, method, status)` z `int` dla statusu. Puste linie mają być pomijane.",
+      "starter": "LOG = '10.0.0.7 - - [15/Oct/2026:09:12:44] \"POST /login\" 401'\n\ndef parse_line(line):\n    # zwroc (ip, method, status) albo None dla pustych/rozbitych linii\n    ...\n",
+      "hints": [
+        "`str.split()` z maksymalnym argumentem zachowuje spacje w środku segmentu — tu potrzebujesz metody `\"METHOD path\"` jako całości.",
+        "Nie walcz z regexem na start: `parts = line.split()` daje ci `['10.0.0.7','-','-','[ts]','\"POST','/login\"','401']`. Sekwencję `\"METHOD path\"` sklej z dwóch elementów."
+      ],
+      "solution": "def parse_line(line):\n    p = line.split()\n    if len(p) < 7:\n        return None\n    method = p[4].strip('\"')\n    return (p[0], method, int(p[6]))",
+      "tests": "check('ip', parse_line(LOG)[0] == '10.0.0.7', parse_line(LOG))\ncheck('status jest int', isinstance(parse_line(LOG)[2], int), type(parse_line(LOG)[2]))\ncheck('pusta linia', parse_line('') is None)\n",
+      "setup": "LOG = '10.0.0.7 - - [15/Oct/2026:09:12:44] \"POST /login\" 401'\n"
+    },
+    {
+      "id": "py-02-digest",
+      "track": "python",
+      "title": "Zweryfikuj sumę kontrolną",
+      "difficulty": 2,
+      "free": true,
+      "points": 120,
+      "executor": "pyodide",
+      "brief": "Masz bajty pliku i oczekiwany digest. Uzupełnij `sha256_hex`, żeby zwracała hexdigest. **Uwaga na pułapkę**: `int(digest, 16)` bez ograniczeń przestaś działać na nowym Pythonie 3.11+ (`ValueError` na `int.from_bytes` overflow) — porównuj zawsze stringi.",
+      "starter": "import hashlib\n\nDATA = b'anvil-lab'\nEXPECTED = '621824640ff85d4bfab5a9092831b8674de5d14b0f1e9c5532e3fb8410f469f0'\n\ndef sha256_hex(data: bytes) -> str:\n    ...\n",
+      "hints": [
+        "`hashlib.sha256(data).hexdigest()` — bez `usedforsecurity` nie ma znaczenia dla długości, ale `hashlib.sha256(data).digest().hex()` też działa.",
+        "Digest to 32 bajty → 64 znaki heks. Jeśli dostajesz mniej, kodujesz `repr` zamiast surowych bajtów."
+      ],
+      "solution": "def sha256_hex(data: bytes) -> str:\n    return hashlib.sha256(data).hexdigest()",
+      "tests": "check('typ', isinstance(sha256_hex(DATA), str))\ncheck('dlugosc hexdigest', len(sha256_hex(DATA)) == 64)\ncheck('znany wektor', sha256_hex(b'') == 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')\ncheck('zgadza sie z oczekiwanym', sha256_hex(DATA) == EXPECTED, sha256_hex(DATA))\n",
+      "setup": "import hashlib\nDATA = b'anvil-lab'\nEXPECTED = '621824640ff85d4bfab5a9092831b8674de5d14b0f1e9c5532e3fb8410f469f0'\n"
+    },
+    {
+      "id": "py-03-decoder",
+      "track": "python",
+      "title": "Trzy warstwy szyfrowania",
+      "difficulty": 2,
+      "free": true,
+      "points": 150,
+      "executor": "pyodide",
+      "brief": "Zonkayload to base64, pod nim ROT13, pod tym znak po znaku. Uzupełnij `decode_blob`, żeby zwracała odszyfrowany tekst. Uwaga: `base64.b64decode` potrzebuje bajtów, a w Pythonie 3 `str` to nie bajty — i `b64decode` domyślnie nie odcina śmieci, więc dolicz `validate=True`.",
+      "starter": "import base64\n\nBLOB = 'fWdwM3Nzcl96ZjRqe2ViZ3AzaQ=='\n\ndef rot13(s: str) -> str:\n    ...\n\ndef decode_blob(b64: str) -> str:\n    ...\n",
+      "hints": [
+        "ROT13 to przesunięcie o 13 w ASCII liter; `str.maketrans` + `str.translate` robi to w jednej linii.",
+        "Kolejność: base64 → ROT13 → odwrócenie znaków. Kolejność jest tu częścią zadania."
+      ],
+      "solution": "def rot13(s):\n    return s.translate(str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz','NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm'))\n\ndef decode_blob(b64):\n    raw = base64.b64decode(b64, validate=True).decode()\n    return rot13(raw)[::-1]",
+      "tests": "check('warstwa 1', rot13('flag{') == 'synt{', rot13('flag{'))\ncheck('wynik', decode_blob(BLOB) == 'v3ctor{w4sm_eff3ct}', decode_blob(BLOB))\n",
+      "setup": "import base64\nBLOB = 'fWdwM3Nzcl96ZjRqe2ViZ3AzaQ=='\n"
+    },
+    {
+      "id": "py-04-sqli",
+      "track": "security",
+      "title": "Wykryj próbę wstrzyknięcia",
+      "difficulty": 3,
+      "free": true,
+      "points": 180,
+      "executor": "pyodide",
+      "brief": "Dostajesz część zapytania HTTP. Uzupełnij `is_injection`, żeby zwracała `True`, gdy wartość wygląda na próbę SQL injection: `' OR`, `\" OR`, `UNION SELECT`, `; DROP`, `--` w komentarzu, albo `SLEEP(`. **Nie** traktuj literalnego `%27` (zakodowanego apostrofu) jako ataku — to poprawnie zakodowana wartość.",
+      "starter": "def is_injection(value: str) -> bool:\n    ...\n",
+      "hints": [
+        "Zrób listę wzorców i użyj `any()`, zamiast pisać piętę `if`.",
+        "Znormalizuj wejście: `.lower()` i `+ ' '`, żeby `'OR` bez spacji też się łapało."
+      ],
+      "solution": "def is_injection(value: str) -> bool:\n    v = value.lower()\n    patterns = [\"' or\", '\" or', 'union select', '; drop', '--', 'sleep(']\n    return any(p in v for p in patterns)",
+      "tests": "check('klasyczne OR', is_injection(\"admin' OR '1'='1\") is True)\ncheck('union', is_injection('1 UNION SELECT password FROM users') is True)\ncheck('zwykly tekst', is_injection('Marian Nowak') is False)\ncheck('zakodowany apostrof to nie atak', is_injection('O\\'Brien') is False)\ncheck('kolejny atak', is_injection('1; DROP TABLE users--') is True)\n",
+      "setup": "\n"
+    },
+    {
+      "id": "rb-01-enumerable",
+      "track": "ruby",
+      "title": "Enumerable tam, gdzie pętla",
+      "difficulty": 2,
+      "free": true,
+      "points": 130,
+      "executor": "vm",
+      "brief": "Ta ścieżka wymaga prawdziwego interpretera, więc w v1 laby Rubiego prowadzą w pobranej maszynie wirtualnej.\n\n`ruby\nEVENTS = [{'id' => 4, 'severity' => 'low', 'type' => 'file_open'},\n           {'id' => 9, 'severity' => 'high', 'type' => 'exec'},\n           {'id' => 2, 'severity' => 'high', 'type' => 'file_open'},\n           {'id' => 7, 'severity' => 'low', 'type' => 'auth'},\n           {'id' => 1, 'severity' => 'low', 'type' => 'exec'}]\n\ndef suspicious(events)\n  # zwroc posortowane id: severity high ALBO type == 'exec'\nend\n\nputs suspicious(EVENTS).inspect  # powinno dać [1, 2, 9]\n`\n\nW lab VM: `bash lab-vm/build.sh --run`, potem `labcheck --task rb-01-enumerable`.",
+      "hints": [
+        "`events.select { |e| ... }.map { |e| e['id'] }.sort` — to cały pipeline w trzech krokach.",
+        "`select` zwraca elementy, nie indeksy — stąd dopiero potem `map`."
+      ],
+      "vm_check": "labcheck --task rb-01-enumerable",
+      "vm_accept": [
+        "OK",
+        "pass",
+        "zaliczone"
+      ]
+    },
+    {
+      "id": "rb-02-redact",
+      "track": "security",
+      "title": "Zamaskuj numer karty w logu",
+      "difficulty": 2,
+      "free": true,
+      "points": 140,
+      "executor": "vm",
+      "brief": "Maska numerów kart to realna robota w logach i zgłoszeniach, więc ten lab startuje w pobranej maszynie wirtualnej.\n\n`ruby\ndef redact(text)\n  # zwroc [nowy_tekst, ile_podmian]\nend\n\np redact('karta 4111 1111 1111 1111 odrzucona')  # ['karta ****-****-****-1111 odrzucona', 1]\np redact('4111-1111-1111-1111')                   # ['****-****-****-1111', 1]\np redact('brak danych')                            # ['brak danych', 0]\n`\n\nW lab VM: `labcheck --task rb-02-redact`.",
+      "hints": [
+        "`gsub` z blokiem daje ci dopasowanie w `$~[0]`, więc możesz liczyć podmiany w środku.",
+        "Nie używaj `gsub` z dwoma argumentami łańcuchowymi — licznik podmian dostaniesz z `gsub` z blokiem."
+      ],
+      "vm_check": "labcheck --task rb-02-redact",
+      "vm_accept": [
+        "OK",
+        "pass",
+        "zaliczone"
+      ]
+    },
+    {
+      "id": "rs-01-predict",
+      "track": "rust",
+      "title": "Przewiduj wyjście: ownership",
+      "difficulty": 3,
+      "free": true,
+      "points": 160,
+      "executor": "quiz",
+      "brief": "Rust nie kompiluje się w przeglądarce, ale kompilator nadal jest najlepszym nauczycielem ownership. Który z tych programów **wkompiluje się**?\n\n```\nfn main() {\n    let s = String::from(\"anvil\");\n    let t = s;\n    println!(\"{}\", s);\n}\n```\n\nWybierz program, który się kompiluje. Potem przeczytaj wyjaśnienie — model `move` to podstawa całego języka.",
+      "choices": [
+        "`let t = s;` przenosi wartość, więc `s` przestaje istnieć i `println!(\"{}\", s)` nie kompiluje się",
+        "`String` implementuje `Copy`, więc oba binds działają i wypisze \"anvil\"",
+        "Kompiluje się, ale wypisze \"anvil\" dwa razy",
+        "Kompiluje się tylko z jawnym `.clone()` w `println!`"
+      ],
+      "answer": [
+        0
+      ],
+      "explain": "`String` nie implementuje `Copy` — przypisanie `let t = s;` to **move**: bufor zostaje przeniesiony i oryginalny bind jest unieważniony. Dlatego używa się `&str` (pożyczanie, tanie) albo `s.clone()`. W lab VM ten sam program puszczasz przez `cargo build` i czytasz prawdziwy komunikat błędu.",
+      "vm_check": "cargo build 2>&1 | head -20"
+    },
+    {
+      "id": "rs-02-panic",
+      "track": "rust",
+      "title": "Przeczytaj komunikat borrow checkera",
+      "difficulty": 4,
+      "free": true,
+      "points": 180,
+      "executor": "quiz",
+      "brief": "W lab VM dostajesz taki błąd:\n\n```\nerror[E0382]: borrow of `v` as immutable because it is also borrowed as mutable\n  --> src/main.rs:12:18\n   |\n12 |     v.push(v.len());\n   |     ^          ^ borrow of `v` as immutable here\n   |     |          first mutable borrow later used by call\n```\n\nJaki jest najczystszy fix?",
+      "choices": [
+        "`let n = v.len(); v.push(n);` — najpierw kończysz pożyczanie, potem mutujesz",
+        "`v.push(v.len());` z `#[allow(borrow_check)]` na funkcji",
+        "Zmiana `v` na `Vec<&str>` żeby `.len()` nie pożyczał",
+        "`let n = &v.len();` żeby dłużej pożyczać"
+      ],
+      "answer": [
+        0
+      ],
+      "explain": "Klasyczny problem „mutable borrow w trakcie niemutowalnego pożyczenia”. Rozdzielenie wywołań daje obu pożyczaniom osobne, niekolidujące zakresy życia. `#[allow(...)]` tylko wycisza diagnostykę — błąd wraca przy zmianie kodu.",
+      "vm_check": "cargo build 2>&1 | head -20"
+    },
+    {
+      "id": "sec-01-technique",
+      "track": "security",
+      "title": "Nazwij technikę z logu",
+      "difficulty": 2,
+      "free": true,
+      "points": 120,
+      "executor": "quiz",
+      "brief": "Fragment logu WAF z Twojego środowiska:\n\n```\n10.4.0.19 GET /search?q=%27%20UNION%20SELECT%20password%20FROM%20users--&status=200\n10.4.0.19 GET /search?q=%27%20UNION%20SELECT%20password%20FROM%20users--&status=500\n10.4.0.19 GET /admin.php&status=404\n```\n\nJak nazywa się atak, który widzisz w zapytaniu?",
+      "choices": [
+        "SQL injection przez UNION SELECT ( UNION połączone z komentarzem `--`, żeby odciąć resztę zapytania)",
+        "Cross-site scripting — atakujący wstrzykuje `<script>`",
+        "Command injection przez `|` w parametrze",
+        "Brute force po katalogu"
+      ],
+      "answer": [
+        0
+      ],
+      "explain": "Trzy cechy razem: cudzysłów łamie literał w zapytaniu, `UNION SELECT` dokłada drugie zapytanie, `--` komentuje końcówkę oryginalnego. Wtrzyknięcie skuteczne kończy się czym? Sprawdź sam: zrób request do celu w lab VM i zobacz, co zwraca baza."
+    },
+    {
+      "id": "vm-01-insecure-flag",
+      "track": "security",
+      "title": "Uruchom usługę z złą flagą (lab VM)",
+      "difficulty": 3,
+      "free": true,
+      "points": 200,
+      "executor": "vm",
+      "brief": "Ta seria labów potrzebuje prawdziwego Linuksa, sieci i procesu, którego nie da się zasymulować w karcie przeglądarki. Ściągnij obraz lab VM (link na stronie głównej), zainstaluj go i uruchom:\n\n1. `bash lab-vm/build.sh --run`\n2. wewnątrz maszyny: `systemctl start anvil-lab && labcheck --task vm-01`\n\nCelowo ustawisz flagę, która wycieka dane do logu, i potwierdzisz wyciek jednym poleceniem.",
+      "vm_check": "labcheck --task vm-01",
+      "vm_accept": [
+        "OK",
+        "pass",
+        "zaliczone"
+      ]
+    },
+    {
+      "id": "sec-l1-webscan",
+      "track": "security",
+      "title": "Napisz własny skaner z ShadowScan",
+      "difficulty": 5,
+      "free": false,
+      "points": 600,
+      "executor": "vm",
+      "brief": "Zadanie z pełnej ścieżki: budujesz skaner, który potrafi zrobić coś więcej niż CyberForge w wersji publicznej — respektuje limit requestów, nie zgaduje poza zakresem i zapisuje wynik w formacie, który da się porównać między uruchomieniami.",
+      "vm_check": "labcheck --task sec-l1-webscan"
+    },
+    {
+      "id": "py-l1-async",
+      "track": "python",
+      "title": "Async skaner portów bez zgadywania",
+      "difficulty": 5,
+      "free": false,
+      "points": 700,
+      "executor": "pyodide",
+      "brief": "Pełna ścieżka: `asyncio` + ograniczenie współbieżności, poprawny timeout i raport w JSON. W wersji darmowej zbliżasz się do tego zadaniem `py-04-sqli`; tutaj chodzi o kod, który wytrzyma realną sieć.",
+      "starter": "# pelna implementacja\npass\n",
+      "hints": [
+        "Skąd wziąć dane testowe, jeśli nie możesz skanować?"
+      ],
+      "tests": "\n",
+      "setup": "# pelna implementacja\npass\n"
+    },
+    {
+      "id": "rs-l1-ffi",
+      "track": "rust",
+      "title": "Bezpieczne FFI do eBPF",
+      "difficulty": 5,
+      "free": false,
+      "points": 900,
+      "executor": "vm",
+      "brief": "Pisanie bezpiecznego wrappera na `bpf_probe_read_user` i walidacja buforów — materiał na poziomie talus-process-monitor, z realnymi testami i porównaniem wydajności.",
+      "vm_check": "labcheck --task rs-l1-ffi"
+    }
+  ]
+}

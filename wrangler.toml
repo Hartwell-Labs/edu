@@ -1,0 +1,21 @@
+name = "hartwell-edu"
+compatibility_date = "2026-10-01"
+account_id = "29ee063c29d9e8f27a8863fadcaa9073"
+main = "src/index.js"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"   # bez tego env.ASSETS nie istnieje i worker rzuca 1101
+html_handling = "auto-trailing-slash"
+not_found_handling = "404-page"
+# Worker musi się uruchomić przed plikami statycznymi, inaczej CSP i nagłówki
+# bezpieczeństwa nigdy nie dochodzą do odpowiedzi.
+run_worker_first = true
+
+# Trasa (nie custom_domain) — tak samo jak hartwell-site dla hartwell-labs.pl.
+# Token CF używany do wdrożeń nie ma zakresu Workers Domains, więc
+# `custom_domain = true` cicho się pomijał i subdomena zwracała 522.
+routes = [
+  { pattern = "edu.hartwell-labs.pl", zone_name = "hartwell-labs.pl" },
+  { pattern = "edu.hartwell-labs.pl/*", zone_name = "hartwell-labs.pl" },
+]
