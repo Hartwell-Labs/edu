@@ -15,17 +15,16 @@
   "use strict";
 
   var PYODIDE_BASE = "/vendor/pyodide/";
-  var MARK = "@@R@@";
   var PBKDF2_ITERS = 210000;
   var KEY = "anvil:";
   var TRACK_LABELS = { security: "Cybersecurity", python: "Python", ruby: "Ruby", rust: "Rust" };
 
   var S = { tasks: [], byId: {}, cur: null, progress: {}, user: null, streak: 0, pyodide: null };
-  var $ = function (id, root) { return (root || document).getElementById(id); };
+  var $ = function (id, root) { return (root || document).querySelector("#" + id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
 
-  /** Premium (plan !== free) opens the tasks past the free ten. */
-  function unlocked(t) { return t.free !== false || (S.user && S.user.plan && S.user.plan !== "free"); }
+  /** An account opens the whole public catalogue; `plan` only marks a supporter. */
+  function unlocked() { return !!S.user; }
 
   function md(s) {
     // inline: **bold**, `code`, fenced blocks, bullet lists
@@ -84,6 +83,9 @@
       renderWho();
       renderBanner();
       renderSide(trackParam());
+      if (S.cur && S.user) open(S.cur.id);
+      else if (!S.user) { S.cur = null; renderGate(); }
+      else if ($("main")) { var nxt = nextTask() || S.tasks[0]; if (nxt) open(nxt.id); }
       return me;
     });
   }
@@ -210,6 +212,14 @@
   }
   function trackParam() { return new URLSearchParams(location.search).get("track"); }
 
+  /** Pierwsze nierozwiązane zadanie — dokąd podpowiedzieć po zalogowaniu. */
+  function nextTask() {
+    for (var i = 0; i < S.tasks.length; i++) {
+      if (!(S.progress[S.tasks[i].id] || {}).passed) return S.tasks[i];
+    }
+    return null;
+  }
+
   function markDone(t, hints, points) {
     var s = S.progress[t.id] || (S.progress[t.id] = {});
     s.passed = true;
@@ -248,22 +258,52 @@
     var html = "";
     Object.keys(by).forEach(function (k) {
       if (filter && k !== filter) return;
-      var open = by[k].filter(unlocked);
-      var done = by[k].filter(function (t) { return (S.progress[t.id] || {}).passed; }).length;
-      html += "<h3>" + (TRACK_LABELS[k] || k) + ' <span class="side-count">' + done + "/" + open.length + "</span></h3>";
-      by[k].forEach(function (t) {
+      var list = by[k];
+      var done = list.filter(function (t) { return (S.progress[t.id] || {}).passed; }).length;
+      html += "<h3>" + (TRACK_LABELS[k] || k) + ' <span class="side-count">' + done + "/" + list.length + "</span></h3>";
+      list.forEach(function (t) {
         var st = S.progress[t.id] || {};
-        var lock = unlocked(t) ? "" : '<span class="lock">🔒</span>';
-        var cls = "task" + (S.cur && S.cur.id === t.id ? " active" : "") + (st.passed ? " done" : "") + (st.hints ? " hinted" : "");
-        html += '<button class="' + cls + '" data-id="' + t.id + '">' +
+        var open = unlocked();
+        var cls = "task" + (S.cur && S.cur.id === t.id ? " active" : "") + (st.passed ? " done" : "") + (st.hints ? " hinted" : "") + (open ? "" : " veiled");
+        html += '<button class="' + cls + '" data-id="' + t.id + '"' + (open ? "" : ' data-veiled="1"') + ">" +
           '<span class="mark">' + (st.passed ? "✓" : st.hints ? "!" : "") + "</span>" +
-          "<span>" + esc(t.title) + "</span>" + lock + "</button>";
+          "<span>" + esc(open ? t.title : "Locked until you sign up") + "</span>" +
+          (open ? "" : '<span class="lock">🔒</span>') + "</button>";
       });
     });
     el.innerHTML = html;
     el.querySelectorAll(".task").forEach(function (b) {
-      b.addEventListener("click", function () { open(b.getAttribute("data-id")); });
+      b.addEventListener("click", function () {
+        if (b.getAttribute("data-veiled")) { openAuth("register"); return; }
+        open(b.getAttribute("data-id"));
+      });
     });
+  }
+
+  /** Bez konta labow nie ma — pokazujemy bramkę zamiast zadań. */
+  function renderGate() {
+    var m = $("main");
+    if (!m) return;
+    var tracks = {};
+    S.tasks.forEach(function (t) { tracks[t.track] = (tracks[t.track] || 0) + 1; });
+    var rows = Object.keys(tracks).map(function (k) {
+      return "<li><b>" + (TRACK_LABELS[k] || k) + "</b><span>" + tracks[k] + " labs</span></li>";
+    }).join("");
+    m.innerHTML =
+      '<div class="gate">' +
+      '<span class="kicker">Free account · full catalogue · no card</span>' +
+      "<h1>Create a free account and start the first lab</h1>" +
+      "<p class=\"lede\" style=\"margin:14px 0 22px\">An account takes a minute: a nickname, an e-mail and a password. " +
+      "That is the whole price — every lab in the catalogue stays free, your progress follows you to any device, " +
+      "and we never send more than the one confirmation e-mail.</p>" +
+      '<div class="gate-actions"><button class="btn btn-primary" id="gate-cta">Create account</button>' +
+      '<button class="btn btn-ghost" id="gate-login">I already have one</button></div>' +
+      '<ul class="gate-tracks">' + rows + "</ul>" +
+      '<p class="gate-foot">Need labs written for your team, a private group or a lab machine built around your stack? ' +
+      '<a href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Write to us</a> — we quote per conversation, never per list.</p>' +
+      "</div>";
+    $("gate-cta").addEventListener("click", function () { openAuth("register"); });
+    $("gate-login").addEventListener("click", function () { openAuth("login"); });
   }
 
   function open(id) {
@@ -279,9 +319,11 @@
     if (!m) return;
 
     var kind = t.executor === "pyodide" ? "Python · WebAssembly" : t.executor === "vm" ? "lab machine" : "read and answer";
-    var tier = unlocked(t)
-      ? '<span>' + (t.free === false ? "full track" : "in the free tier") + "</span>"
-      : '<span class="tier-locked">past the free ten</span>';
+    var tier = S.user
+      ? (S.user.plan && S.user.plan !== "free"
+          ? '<span class="tier-full">full track · ' + esc(S.user.plan) + "</span>"
+          : "<span>in the free catalogue</span>")
+      : '<span class="tier-locked">sign up to open</span>';
 
     var head =
       '<div class="crumb">' + (TRACK_LABELS[t.track] || t.track) + "</div>" +
@@ -293,10 +335,11 @@
       '<div class="brief">' + md(t.brief) + "</div>";
 
     var body;
-    if (!unlocked(t)) {
-      body = '<div class="locked"><h3>This one is past the first ten</h3>' +
-        "<p>We publish no price list — depending on scope (labs for your stack, a private group, a machine built around your infrastructure) we agree it in a conversation. The first ten labs stay free.</p>" +
-        '<a class="btn btn-primary" href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Ask about access</a></div>';
+    if (!unlocked()) {
+      body = '<div class="locked"><h3>Sign up to open this lab</h3>' +
+        "<p>A free account is all it takes — a nickname, an e-mail and a password. Every lab in the catalogue is free afterwards, and your progress follows you between devices.</p>" +
+        '<div class="gate-actions"><button class="btn btn-primary" id="gate-task-cta">Create free account</button>' +
+        '<button class="btn btn-ghost" id="gate-task-login">I already have one</button></div></div>';
     } else if (t.executor === "quiz") {
       body = '<div class="choices" id="choices"></div><div class="out" id="out" hidden><div class="out-head" id="outhead"></div><pre id="outbody"></pre></div>';
     } else if (t.executor === "vm") {
@@ -321,6 +364,8 @@
   }
 
   function wire(t) {
+    var cta = $("gate-task-cta"); if (cta) cta.addEventListener("click", function () { openAuth("register"); });
+    var lg = $("gate-task-login"); if (lg) lg.addEventListener("click", function () { openAuth("login"); });
     var code = $("code");
     if (code) code.addEventListener("input", function () { saveCode(t, code.value); });
     var run = $("run"); if (run) run.addEventListener("click", function () { runTask(t); });
@@ -395,8 +440,13 @@
     var st = S.progress[t.id] || (S.progress[t.id] = {});
     st.attempts = (st.attempts || 0) + 1; saveLocal();
     out("busy", "Running the tests…");
-    loadPyodide().then(function () {
-      return S.pyodide.runPythonAsync([
+    var captured = "";
+    loadPyodide().then(function (py) {
+      // Pyodide does not hand stdout back from runPythonAsync: prints have to be
+      // captured explicitly, and the checker's verdict comes from a global.
+      py.setStdout({ batched: function (s) { captured += s + "\n"; } });
+      py.setStderr({ batched: function (s) { captured += s + "\n"; } });
+      return py.runPythonAsync([
         "import json",
         "def check(name, ok, detail=''):",
         "    __R__.append({'name': name, 'ok': bool(ok), 'detail': str(detail)[:300]})",
@@ -406,17 +456,18 @@
         "",
         t.tests || "",
         "",
-        "print(" + JSON.stringify(MARK) + " + json.dumps(__R__))",
-      ].join("\n"));
-    }).then(function (o) {
-      var text = String(o), i = text.lastIndexOf(MARK);
-      if (i === -1) { out("fail", "The tests reported nothing. Use check(...) to verify your own logic."); return; }
-      var checks = JSON.parse(text.slice(i + MARK.length));
-      var std = text.slice(0, i).trim();
+        "__RESULT__ = json.dumps(__R__)",
+      ].join("\n")).then(function () {
+        return py.globals.get("__RESULT__");
+      });
+    }).then(function (raw) {
+      if (!raw) { out("fail", "The tests reported nothing. Use check(...) to verify your own logic."); return; }
+      var checks = JSON.parse(String(raw));
       var failed = checks.filter(function (c) { return !c.ok; });
       var lines = checks.map(function (c) {
         return (c.ok ? "  ✓  " : "  ✗  ") + c.name + (c.detail ? "\n        " + c.detail : "");
       });
+      var std = captured.trim();
       if (std) lines.unshift("--- your prints ---\n" + std + "\n");
       if (!failed.length) { out("pass", lines.join("\n")); markDone(t, st.hints || 0); }
       else out("fail", lines.join("\n") + "\n\nFix it and run again — every iteration is learning, not failure.");
@@ -445,13 +496,14 @@
     S.streak = (me.streak && me.streak.days) || 0;
     S.progress = S.user ? (me.progress || {}) : readLocalGuest();
 
-    var want = new URLSearchParams(location.search).get("task");
-    S.cur = (want && S.byId[want]) || null;
+    var q = new URLSearchParams(location.search);
+    var want = q.get("task");
     renderWho();
     renderBanner();
     if ($("side")) {
-      renderSide(trackParam());
-      if (S.cur) open(S.cur.id);
+      renderSide(q.get("track"));
+      if (S.user && want && S.byId[want]) { S.cur = S.byId[want]; open(S.cur.id); }
+      else if (!S.user) { S.cur = null; renderGate(); }
     }
   }).catch(function () {
     var m = $("main"); if (m) m.innerHTML = "<p>Could not load the tasks. Check your connection and refresh.</p>";

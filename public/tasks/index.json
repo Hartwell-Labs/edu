@@ -5,7 +5,8 @@
     "Executors: pyodide (Python in WASM), vm (downloadable lab machine), quiz.",
     "In v1 the tests ship to the browser together with the task — a deliberate choice: the interpreter runs on the student's machine, not on our server.",
     "Tests check behaviour, not the shape of your code. 'quiz' tasks have one correct answer.",
-    "Lab VM tasks need a real interpreter, kernel or network. Build it from public/lab-vm/build.sh — it verifies itself without QEMU."
+    "Lab VM tasks need a real interpreter, kernel or network. Build it from public/lab-vm/build.sh — it verifies itself without QEMU.",
+    "Every task in this catalogue is free for any account. Paid work is custom: labs written for a team, a private group, or a lab machine built around a stack — quoted per conversation."
   ],
   "tracks": [
     {
@@ -225,38 +226,104 @@
       "track": "security",
       "title": "Write your own scanner with ShadowScan",
       "difficulty": 5,
-      "free": false,
+      "free": true,
       "points": 600,
       "executor": "vm",
-      "brief": "A task from the full track: you build a scanner that goes further than the public build of CyberForge — it respects a request budget, never guesses outside the given scope, and stores results in a format you can diff between runs.",
-      "vm_check": "labcheck --task sec-l1-webscan"
+      "brief": "A scanner is only useful if you can trust its output. On the lab machine you get a scope file, a request budget and a fixture of canned responses. Write `/home/student/scan.json`: one entry per in-scope host, exactly once each, sorted by host, and never more requests than the budget allows.\n\n```\ncat /home/student/targets.txt     # lab-a.internal, lab-b.internal, lab-c.internal\ncat /home/student/budget          # 50\ncat /home/student/fixtures/responses.json\nlabcheck --task sec-l1-webscan\n```\n\n`lab-d.internal` sits in the fixture on purpose. Including it fails the task: a scanner that walks outside its scope is how real scanners end up in someone else's network.",
+      "vm_check": "labcheck --task sec-l1-webscan",
+      "vm_accept": [
+        "OK  sec-l1-webscan"
+      ]
     },
     {
-      "id": "py-l1-async",
-      "track": "python",
-      "title": "An async port scanner that never guesses",
-      "difficulty": 5,
-      "free": false,
-      "points": 700,
+      "id": "py-07-ratelimit",
+      "track": "security",
+      "title": "Count requests per client in a sliding window",
+      "difficulty": 4,
+      "free": true,
+      "points": 240,
       "executor": "pyodide",
-      "brief": "The full track: `asyncio` with a concurrency limit, a real timeout and a JSON report. In the free tier you approach this with the `py-04-sqli` task; here the code has to survive a real network.",
-      "starter": "# full implementation\npass\n",
+      "brief": "Rate limiting only works if the window really slides. You get request timestamps in seconds. Complete `over_limit` so it returns the client ids that sent **more than `limit` requests inside any window of `window` seconds**, sorted by id.\n\nA fixed bucket per minute is the classic bug: an attacker splits the burst across the boundary and gets twice the budget. The window here starts at every single request, not on a boundary.",
+      "starter": "REQUESTS = [('a', 0), ('a', 1), ('a', 2), ('b', 10), ('a', 2), ('b', 11), ('b', 11)]\nSPARSE = [('c', 4), ('c', 6)]\n\ndef over_limit(requests, window=3, limit=2):\n    # return sorted client ids that exceed the limit inside any sliding window\n    ...\n",
       "hints": [
-        "Where do test data come from if you are not allowed to scan?"
+        "Group by client first and sort each list of timestamps — a sliding window needs them ordered.",
+        "Two pointers: `hi` walks forward while `times[hi] < t0 + window`, `lo` forward while `times[lo] < t0`. The count is `hi - lo`.",
+        "The edge that matters: two requests 2 seconds apart (SPARSE below) sit in different 5-second buckets but in the same sliding window. That is the bug this lab is about."
       ],
-      "tests": "\n",
-      "setup": "# full implementation\npass\n"
+      "solution": "from collections import defaultdict\n\ndef over_limit(requests, window=3, limit=2):\n    by_client = defaultdict(list)\n    for client, ts in requests:\n        by_client[client].append(ts)\n    bad = []\n    for client, times in by_client.items():\n        times.sort()\n        lo = hi = 0\n        for t0 in times:\n            while hi < len(times) and times[hi] < t0 + window:\n                hi += 1\n            while lo < hi and times[lo] < t0:\n                lo += 1\n            if hi - lo > limit:\n                bad.append(client)\n                break\n    return sorted(bad)",
+      "tests": "check('okno 3s, limit 2: obaj klienci', over_limit(REQUESTS, window=3, limit=2) == ['a', 'b'], over_limit(REQUESTS, window=3, limit=2))\ncheck('okno 3s, limit 4: nikt', over_limit(REQUESTS, window=3, limit=4) == [], over_limit(REQUESTS, window=3, limit=4))\ncheck('okno przesuwne, nie kubełek', over_limit(SPARSE, window=5, limit=1) == ['c'], over_limit(SPARSE, window=5, limit=1))\ncheck('pustka to nie atak', over_limit([]) == [])\n",
+      "setup": "REQUESTS = [('a', 0), ('a', 1), ('a', 2), ('b', 10), ('a', 2), ('b', 11), ('b', 11)]\nSPARSE = [('c', 4), ('c', 6)]\n\n"
     },
     {
       "id": "rs-l1-ffi",
       "track": "rust",
       "title": "Safe FFI to eBPF",
       "difficulty": 5,
-      "free": false,
+      "free": true,
       "points": 900,
       "executor": "vm",
-      "brief": "Writing a safe wrapper around `bpf_probe_read_user` and validating buffers — material at the level of talus-process-monitor, with real tests and a performance comparison.",
-      "vm_check": "labcheck --task rs-l1-ffi"
+      "brief": "`bpf_probe_read_user` returns a negative errno and leaves the destination buffer untouched when it fails. Wrap it so a caller can never receive a half-filled buffer, and never panic on a short read.\n\n```\ncd /home/student/ffi\ncargo test                       # your own #[cfg(test)] module\nlabcheck --task rs-l1-ffi        # builds and runs the tests for you\n```\n\nThis is the same shape as the wrapper in talus-process-monitor: the kernel call is unsafe, so the safe surface has to do the checking.",
+      "vm_check": "labcheck --task rs-l1-ffi",
+      "vm_accept": [
+        "OK  rs-l1-ffi"
+      ]
+    },
+    {
+      "id": "py-05-jwt",
+      "track": "python",
+      "title": "Decode a JWT and spot the unsigned one",
+      "difficulty": 3,
+      "free": true,
+      "points": 190,
+      "executor": "pyodide",
+      "brief": "A JWT is three base64**url** parts separated by dots. Complete `decode_payload` so it returns the payload as a dictionary, and `is_unsigned` so it reports a token whose header says `alg: none`. Two traps: base64url uses `-`/`_` instead of `+`/`/` and drops the `=` padding, and `json.loads` raises on garbage — a malformed token must give `None`, not an exception.",
+      "starter": "import base64, json\n\nTOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjMiLCJyb2xlIjoiYWRtaW4ifQ.c2lnbmF0dXJl'\nNONE_TOKEN = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.'\n\ndef decode_payload(token: str):\n    # return the payload dict, or None for anything malformed\n    ...\n\ndef is_unsigned(token: str) -> bool:\n    ...\n",
+      "hints": [
+        "`base64.urlsafe_b64decode(part + '=' * (-len(part) % 4))` — the padding has to come back.",
+        "`is_unsigned` decodes the *header*, not the payload: `json.loads` the first part and look at `alg`."
+      ],
+      "solution": "def _part(p):\n    return base64.urlsafe_b64decode(p + '=' * (-len(p) % 4))\n\ndef decode_payload(token):\n    parts = token.split('.')\n    if len(parts) < 2:\n        return None\n    try:\n        return json.loads(_part(parts[1]))\n    except Exception:\n        return None\n\ndef is_unsigned(token):\n    parts = token.split('.')\n    if not parts or not parts[0]:\n        return False\n    try:\n        return json.loads(_part(parts[0])).get('alg') == 'none'\n    except Exception:\n        return False",
+      "tests": "check('payload', decode_payload(TOKEN) == {'sub': '123', 'role': 'admin'}, decode_payload(TOKEN))\ncheck('smieci to None', decode_payload('nope') is None)\ncheck('za krotkie tokeny', decode_payload('a.b') is None)\ncheck('alg none wykryty', is_unsigned(NONE_TOKEN) is True)\ncheck('podpisany token nie jest unsigned', is_unsigned(TOKEN) is False)\n",
+      "setup": "import base64, json\n\nTOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjMiLCJyb2xlIjoiYWRtaW4ifQ.c2lnbmF0dXJl'\nNONE_TOKEN = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.'\n\n"
+    },
+    {
+      "id": "py-06-ipgrep",
+      "track": "security",
+      "title": "Count who is hammering the service",
+      "difficulty": 2,
+      "free": true,
+      "points": 150,
+      "executor": "pyodide",
+      "brief": "A firewall log, one line per request. Complete `top_ips` so it returns the addresses seen **more than once**, most requests first, each as an `(ip, count)` tuple. Lines that do not start with an IP address should be skipped, not crash the run — log files are full of continuation lines.",
+      "starter": "LOG = '''10.0.0.7 GET /login 401\n10.0.0.7 GET /admin 403\n10.0.0.9 GET / 200\nbroken line without an address\n10.0.0.7 GET /wp-admin 404\n192.168.1.4 GET / 200\n192.168.1.4 POST /login 401'''\n\ndef top_ips(lines, threshold=1):\n    # return [(ip, count), ...] for addresses above the threshold, busiest first\n    ...\n",
+      "hints": [
+        "A quick filter is `line.split()[0].count('.') == 3` — IPv4 has three dots, and a broken line has no token at all.",
+        "`collections.Counter` then a sorted comprehension over `items()` with `reverse=True` does the rest."
+      ],
+      "solution": "from collections import Counter\n\ndef top_ips(lines, threshold=1):\n    counts = Counter()\n    for line in lines:\n        parts = line.split()\n        if not parts:\n            continue\n        ip = parts[0]\n        if ip.count('.') != 3:\n            continue\n        counts[ip] += 1\n    out = [(ip, n) for ip, n in counts.items() if n > threshold]\n    return sorted(out, key=lambda kv: -kv[1])",
+      "tests": "check('najbardziej aktywny pierwszy', top_ips(LOG.splitlines())[0] == ('10.0.0.7', 3), top_ips(LOG.splitlines()))\ncheck('drugi tez powyzej progu', top_ips(LOG.splitlines()) == [('10.0.0.7', 3), ('192.168.1.4', 2)], top_ips(LOG.splitlines()))\ncheck('jednorazowy adres odpada', ('10.0.0.9', 1) not in top_ips(LOG.splitlines()))\ncheck('zly linia nie wywala', top_ips(['broken', '', '10.0.0.1 GET / 200']) == [])\n",
+      "setup": "LOG = '''10.0.0.7 GET /login 401\n10.0.0.7 GET /admin 403\n10.0.0.9 GET / 200\nbroken line without an address\n10.0.0.7 GET /wp-admin 404\n192.168.1.4 GET / 200\n192.168.1.4 POST /login 401'''\n\n"
+    },
+    {
+      "id": "rs-03-borrow",
+      "track": "rust",
+      "title": "Predict the output: a reference outlives its owner",
+      "difficulty": 4,
+      "free": true,
+      "points": 190,
+      "executor": "quiz",
+      "brief": "Which program **compiles**?\n\n```\nfn longest(word: &str) -> &str {\n    let owned = word.to_string();\n    &owned\n}\n```",
+      "choices": [
+        "It does not compile: `&owned` would return a reference to a local that is dropped at the end of the function (E0515)",
+        "It compiles and returns a slice of the owned copy, which lives on the heap",
+        "It compiles only with an explicit lifetime annotation like `fn longest<'a>(word: &'a str) -> &'a str`",
+        "It compiles and the value is copied to the caller's stack frame"
+      ],
+      "answer": [
+        0
+      ],
+      "explain": "This is E0515, *cannot return reference to local variable*. The heap allocation survives, but the **binding** `owned` dies with the function, so the borrow checker refuses — it tracks what may be dropped, not where bytes live. Return `String` and let the caller own it, or hand back the input reference with a matching lifetime. Run it on the lab VM and read the message yourself.",
+      "vm_check": "cargo build 2>&1 | head -20"
     }
   ]
 }

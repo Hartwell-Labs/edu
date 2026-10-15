@@ -375,7 +375,7 @@ export default {
       if (p === "/api/manifest") {
         const res = await env.ASSETS.fetch(new Request("https://assets.local/tasks/index.json"));
         if (!res.ok) return json({ tasks: [], error: `manifest ${res.status}` }, { status: 500 });
-        return json(await res.json(), { cacheTtl: 300 });
+        return json(await res.json(), { cacheTtl: 0 });
       }
 
       const res = await env.ASSETS.fetch(request);
@@ -384,6 +384,14 @@ export default {
       h.set("x-content-type-options", "nosniff");
       h.set("referrer-policy", "strict-origin-when-cross-origin");
       h.set("strict-transport-security", "max-age=31536000; includeSubDomains");
+      // The app shell and the engine change often, and a stale copy in a browser or
+      // at the edge is worse than a revalidation round-trip. The 12 MB Pyodide
+      // runtime keeps its long cache — that is the only thing worth caching hard.
+      const immutable = p.startsWith("/vendor/") || /\.(wasm|woff2?|png|svg|jpg|webp|ico)$/i.test(p);
+      if (!immutable) {
+        h.set("cache-control", "no-store, must-revalidate");
+        h.set("cf-cache-status", "DYNAMIC");
+      }
       return new Response(res.body, { status: res.status, headers: h });
     } catch (e) {
       return json({ error: "server error", detail: String(e && e.message || e) }, { status: 500 });

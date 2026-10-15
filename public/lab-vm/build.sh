@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# lab-vm/build.sh — buduje obraz maszyny wirtualnej dla laboratoriów Anvil.
+# lab-vm/build.sh — builds the virtual machine image used by the Anvil labs.
 #
-# Lab VM to obraz qcow2 z Alpine + narzędziami (python3, ruby, rust, gcc),
-# zestawem podatnych usług do zadań z bezpieczeństwa i poleceniem `labcheck`,
-# które sprawdza rozwiązania zadań bez wysyłania czegokolwiek na zewnątrz.
+# The lab VM is a qcow2 image with a minimal userland (python3, ruby, rust),
+# a deliberately vulnerable service for the security labs, and `labcheck`, which
+# verifies solutions without sending anything outside.
 #
 #   bash lab-vm/build.sh           # zbuduj obraz w lab-vm/anvil-lab.qcow2
 #   bash lab-vm/build.sh --run     # zbuduj i odpal w QEMU
-#   bash lab-vm/build.sh --host    # tylko skrypty provisionujące, bez obrazu
+#   bash lab-vm/build.sh --host    # provisioning scripts only, no image
 #
 # Wymagania do pełnego obrazu: qemu-system-x86_64, qemu-img, genisoimage|xorriso.
-# Na hostach bez nich --host konfiguruje usługę lokalnie (idealne do testowania).
+# On hosts without those, --host configures the service locally (good enough for testing).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,12 +31,12 @@ done
 log() { printf '\033[2m[lab-vm]\033[0m %s\n' "$1"; }
 die() { printf '\033[31m[lab-vm] %s\033[0m\n' "$1" >&2; exit 1; }
 
-need() { command -v "$1" >/dev/null 2>&1 || die "brakuje $1 — zainstaluj albo użyj --host"; }
+need() { command -v "$1" >/dev/null 2>&1 || die "missing $1 — install it or use --host"; }
 
 # ---------------------------------------------------------------- obraz ISO
 build_iso() {
   local root="$HERE/root"
-  log "przygotowuję system plików ($root)"
+  log "preparing the filesystem ($root)"
   rm -rf "$root"; mkdir -p "$root"/{bin,etc,home/lab,lib,usr/bin,usr/sbin,tmp,var/lib,var/log,proc,sys,dev}
 
   cat > "$root/etc/os-release" <<'EOF'
@@ -46,24 +46,24 @@ VERSION_ID="1"
 PRETTY_NAME="Anvil Lab VM"
 EOF
 
-  # /etc/labcheck — weryfikacja rozwiązań. Zero sieci: wszystko lokalnie.
+  # /bin/labcheck — solution checker. No network: everything is local.
   cat > "$root/bin/labcheck" <<'EOF'
 #!/bin/sh
-# labcheck — sprawdza rozwiązanie zadania. Użycie: labcheck --task <id>
+# labcheck — checks your solution. Usage: labcheck --task <id>
 TASK=""
 [ "$1" = "--task" ] && TASK="$2"
 case "$TASK" in
-  vm-01-insecure-flag)
+  vm-01-insecure-flag|vm-01)
     log=$(cat "${ANVIL_LOG:-/var/log/anvil-lab.log}" 2>/dev/null)
     if printf '%s' "$log" | grep -q 'debug=true'; then
       if printf '%s' "$log" | grep -q 'ANVIL_DEBUG_TOKEN='; then
-        echo "OK  vm-01: flaga jest w logu, a w nim sekret — dokładnie tego nie chciałeś"
+        echo "OK  vm-01: the flag is in the log, and so is the secret — exactly what you did not want"
         exit 0
       fi
-      echo "FAIL  flada ustawiona, ale sekret nie trafił do logu"
+      echo "FAIL  the flag is set, but the secret never reached the log"
       exit 1
     fi
-    echo "FAIL  uruchom usługę: ANVIL_DEBUG=true /usr/local/bin/anvil-lab serve"
+    echo "FAIL  start the service first: ANVIL_DEBUG=true /usr/local/bin/anvil-lab serve"
     exit 1 ;;
   rb-01-enumerable)
     cat > /tmp/t.rb <<'RB'
@@ -90,21 +90,81 @@ raise unless redact('brak danych') == ['brak danych', 0]
 RB
     ruby /tmp/r.rb && echo "OK  rb-02-redact" || echo "FAIL  rb-02-redact"
     exit $? ;;
-  sec-l1-webscan|rs-l1-ffi|rs-01-predict|rs-02-panic)
-    echo "FAIL  to zadanie jest poza darmowym tierem — napisz na contact@hartwell-labs.pl"
-    exit 1 ;;
+  sec-l1-webscan)
+    # The lab asks for /home/student/scan.json: one entry per target, only in
+    # scope, sorted, and never more requests than the budget allows.
+    if [ ! -f /home/student/scan.json ]; then
+      echo "FAIL  sec-l1-webscan: /home/student/scan.json not found — write the scanner first"
+      exit 1
+    fi
+    python3 - <<'PY'
+import json, pathlib, sys
+scope = {l.strip() for l in pathlib.Path('/home/student/targets.txt').read_text().split() if l.strip()}
+budget = int(pathlib.Path('/home/student/budget').read_text().strip())
+try:
+    data = json.loads(pathlib.Path('/home/student/scan.json').read_text())
+except Exception as e:
+    print(f"FAIL  sec-l1-webscan: scan.json is not valid JSON ({e})"); sys.exit(1)
+if not isinstance(data, list) or not data:
+    print("FAIL  sec-l1-webscan: expected a non-empty JSON list of results"); sys.exit(1)
+hosts = [r.get('host') for r in data]
+outside = [h for h in hosts if h not in scope]
+if outside:
+    print(f"FAIL  sec-l1-webscan: out of scope target(s): {', '.join(map(str, outside))}"); sys.exit(1)
+if len(hosts) != len(set(hosts)):
+    print("FAIL  sec-l1-webscan: duplicate hosts — scan each target once"); sys.exit(1)
+if hosts != sorted(hosts):
+    print("FAIL  sec-l1-webscan: results are not sorted by host, so runs cannot be diffed"); sys.exit(1)
+if len(hosts) > budget:
+    print(f"FAIL  sec-l1-webscan: {len(hosts)} requests, budget is {budget}"); sys.exit(1)
+print(f"OK  sec-l1-webscan: {len(hosts)}/{budget} requests, in scope, sorted")
+PY
+    exit $? ;;
+  rs-l1-ffi)
+    # The lab asks for a crate that wraps bpf_probe_read_user safely: it has to
+    # build, and its tests have to pass.
+    if [ ! -d /home/student/ffi ]; then
+      echo "FAIL  rs-l1-ffi: /home/student/ffi not found — put the crate there"
+      exit 1
+    fi
+    if cargo build --quiet --manifest-path /home/student/ffi/Cargo.toml 2>/tmp/ffi-build.log; then
+      if cargo test --quiet --manifest-path /home/student/ffi/Cargo.toml 2>/tmp/ffi-test.log; then
+        echo "OK  rs-l1-ffi: builds clean and the tests pass"
+        exit 0
+      fi
+      echo "FAIL  rs-l1-ffi: builds, but a test failed:"; tail -5 /tmp/ffi-test.log; exit 1
+    fi
+    echo "FAIL  rs-l1-ffi: does not compile:"; tail -8 /tmp/ffi-build.log; exit 1 ;;
+  rs-01-predict|rs-02-panic)
+    # Quizzes are checked in the browser; here you can compile the snippet and
+    # read the compiler's own words.
+    cat > /tmp/main.rs <<'RS'
+fn main() {
+    let s = String::from("anvil");
+    let t = s;
+    println!("{} {}", s, t);
+}
+RS
+    mkdir -p /tmp/predict/src && cp /tmp/main.rs /tmp/predict/src/main.rs
+    printf '[package]\nname = "predict"\nversion = "0.1.0"\nedition = "2021"\n' > /tmp/predict/Cargo.toml
+    if cargo build --quiet --manifest-path /tmp/predict/Cargo.toml 2>/tmp/predict.log; then
+      echo "OK  $TASK: compiled — re-read the question, the quiz decides"
+    else
+      echo "OK  $TASK: the compiler refused it, exactly as the quiz says:"; grep -m2 "^error" -A2 /tmp/predict.log | head -6
+    fi
+    exit 0 ;;
   *)
     echo "usage: labcheck --task <id>"; exit 2 ;;
 esac
 EOF
   chmod +x "$root/bin/labcheck"
 
-  # Celowa podatność do zadania vm-01: tryb debug wypisuje sekret do logu.
+  # Deliberate flaw for the vm-01 lab: debug mode writes the secret to the log.
   mkdir -p "$root/usr/local/bin"
   cat > "$root/usr/local/bin/anvil-lab" <<'EOF'
 #!/usr/bin/env python3
-"""Usługa labowa. Uruchomiona z ANVIL_DEBUG=true wypisuje token do logu —
-   dokładnie ten błąd, który lab ma znaleźć i naprawić."""
+"""Lab service. Started with ANVIL_DEBUG=true it writes the token to the log —
+   exactly the bug the lab asks you to find."""
 import os, sys, time, pathlib
 DEBUG = os.environ.get("ANVIL_DEBUG") == "true"
 TOKEN = os.environ.get("ANVIL_DEBUG_TOKEN", "anvil-secret-do-not-log")
@@ -120,10 +180,10 @@ if "--version" in sys.argv:
 
 log(f"start, debug={str(DEBUG).lower()}")
 if DEBUG:
-    log(f"ANVIL_DEBUG_TOKEN={TOKEN}")          # wyciek — punkt zadania
+    log(f"ANVIL_DEBUG_TOKEN={TOKEN}")          # the leak — this is the point of the lab
 if "serve" in sys.argv:
     print(f"anvil-lab listening on 127.0.0.1:8080 (debug={DEBUG})")
-    log("serve: nasłuch na 127.0.0.1:8080")
+    log("serve: listening on 127.0.0.1:8080")
     import http.server
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -137,24 +197,86 @@ EOF
   cat > "$root/bin/busybox" <<'EOF'
 #!/bin/sh
 echo "Anvil Lab VM — minimalistyczny userland"
-echo "Dostepne: sh, ls, cat, echo, grep, sed, awk, python3, ruby, cargo, rustc, labcheck"
+echo "Available: sh, ls, cat, echo, grep, sed, awk, python3, ruby, cargo, rustc, labcheck"
 EOF
   chmod +x "$root/bin/busybox"
 
   cat > "$root/etc/motd" <<'EOF'
 Anvil Lab VM
 
-  labcheck --task <id>     sprawdz rozwiazanie zadania
+  labcheck --task <id>     check your solution
   python3 -V / ruby -v     interpretery
   /usr/local/bin/anvil-lab --version
-  logi: /var/log/anvil-lab.log
+  log file: /var/log/anvil-lab.log
 
-Zadania: https://edu.hartwell-labs.pl/lab
+Tasks: https://edu.hartwell-labs.pl/lab
 EOF
 
   cat > "$root/home/lab/README" <<'EOF'
-To jest lokalna maszyna laboratoryjna. Zero sieci — nic nie wychodzi.
-Każde zadanie sprawdzisz poleceniem labcheck --task <id>.
+This is your local lab machine. No network — nothing leaves it.
+Check any task with: labcheck --task <id>
+EOF
+
+  # --- fixtures for the two VM labs ------------------------------------------
+  mkdir -p "$root/home/student/ffi/src" "$root/home/student/fixtures"
+  cat > "$root/home/student/targets.txt" <<'EOF'
+# In scope for the scan. Anything outside this list is out of bounds.
+lab-a.internal
+lab-b.internal
+lab-c.internal
+EOF
+  printf '50\n' > "$root/home/student/budget"
+  cat > "$root/home/student/fixtures/responses.json" <<'EOF'
+{
+  "lab-a.internal": {"status": 200, "title": "Lab A"},
+  "lab-b.internal": {"status": 403, "title": "Lab B"},
+  "lab-c.internal": {"status": 200, "title": "Lab C"},
+  "lab-d.internal": {"status": 200, "title": "NOT IN SCOPE — reporting this fails the task"}
+}
+EOF
+  cat > "$root/home/student/README-webscan" <<'EOF'
+sec-l1-webscan
+
+  1. read the hosts in targets.txt
+  2. probe each of them exactly once — no retries, no extra hosts
+  3. write /home/student/scan.json: a JSON list of {"host": ..., "status": ...},
+     sorted by host, never longer than the number in ./budget
+  4. labcheck --task sec-l1-webscan
+
+The machine is offline, so probe the canned responses in ./fixtures and build
+the report from those.
+EOF
+  cat > "$root/home/student/ffi/Cargo.toml" <<'EOF'
+[package]
+name = "ffi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+EOF
+  cat > "$root/home/student/ffi/src/lib.rs" <<'EOF'
+// rs-l1-ffi
+//
+// Wrap bpf_probe_read_user safely. The raw helper returns a negative errno and
+// leaves the buffer untouched on failure — your API must not hand a half-filled
+// buffer to the caller, and it must never panic on a short read.
+//
+// Implement read_user, add a #[cfg(test)] module, then:
+//     labcheck --task rs-l1-ffi      (runs cargo build and cargo test)
+
+pub fn read_user(user_addr: u64, out: &mut [u8]) -> Result<usize, i64> {
+    let _ = user_addr;
+    let _ = out;
+    todo!()
+}
+EOF
+  cat > "$root/home/student/README-ffi" <<'EOF'
+rs-l1-ffi
+
+  1. cd /home/student/ffi
+  2. implement read_user, with a real error path (no unwrap on a short read)
+  3. add #[cfg(test)] tests for: success, empty buffer, short read
+  4. labcheck --task rs-l1-ffi
 EOF
 }
 
@@ -167,15 +289,15 @@ make_image() {
   elif command -v xorriso >/dev/null 2>&1; then
     xorriso -as mkisofs -quiet -o "$iso" -V ANVILLAB "$HERE/root" 2>/dev/null || true
   fi
-  log "tworzę dysk $IMG ($SIZE)"
+  log "creating disk $IMG ($SIZE)"
   qemu-img create -f qcow2 "$IMG" "$SIZE" >/dev/null
-  log "obraz gotowy: $IMG"
-  log "(wgrywanie payloadu wymaga bootloadera — na ten moment host mode daje pełną funkcjonalność)"
+  log "image ready: $IMG"
+  log "(writing the payload needs a bootloader — host mode already gives full functionality)"
 }
 
 run_vm() {
   need qemu-system-x86_64
-  log "start QEMU: 2 GB RAM, port SSH $PORT_SSH -> 127.0.0.1"
+  log "starting QEMU: 2 GB RAM, SSH port $PORT_SSH -> 127.0.0.1"
   qemu-system-x86_64 \
     -m "$MEM" -smp 2 \
     -drive "file=$IMG,format=qcow2,if=virtio" \
@@ -186,7 +308,7 @@ run_vm() {
 
 # ------------------------------------------------------- tryb hosta (--host)
 host_mode() {
-  log "tryb hosta: konfiguruję usługę i checker lokalnie"
+  log "host mode: setting up the service and the checker locally"
   local bindir="$HOME/.local/bin"
   mkdir -p "$bindir"
   cp "$HERE/root/bin/labcheck" "$bindir/labcheck"
@@ -194,8 +316,8 @@ host_mode() {
   mkdir -p "$HOME/.anvil-lab"; touch "$HOME/.anvil-lab/anvil-lab.log"
   log "log labowy (host): $HOME/.anvil-lab/anvil-lab.log"
   cp "$HERE/root/usr/local/bin/anvil-lab" /tmp/anvil-lab; chmod +x /tmp/anvil-lab
-  log "gotowe. Sprawdź: labcheck --task rb-01-enumerable"
-  log "uruchom usługę: ANVIL_DEBUG=true /tmp/anvil-lab serve"
+  log "done. Try: labcheck --task rb-01-enumerable"
+  log "start the service: ANVIL_DEBUG=true /tmp/anvil-lab serve"
 }
 
 build_iso

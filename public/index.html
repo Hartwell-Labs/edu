@@ -4,16 +4,16 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Anvil — learn by running the code</title>
-<meta name="description" content="Interactive labs: write code, run it in your browser, see which test failed and why. Cybersecurity, Python, Ruby, Rust. The first ten labs need no account." />
+<meta name="description" content="Interactive labs: write code, run it in your browser, see which test failed and why. Cybersecurity, Python, Ruby, Rust. A free account opens the whole catalogue." />
 <link rel="canonical" href="https://edu.hartwell-labs.pl/" />
 <meta name="theme-color" content="#fdfcfb" />
 <meta property="og:title" content="Anvil — learn by running the code" />
-<meta property="og:description" content="Write code, run it, learn from failures. The first ten labs need no account." />
+<meta property="og:description" content="Write code, run it, learn from failures. A free account opens every lab." />
 <meta property="og:type" content="website" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-<link rel="icon" type="image/svg+xml" href="https://hartwell-labs.pl/assets/favicon.svg" />
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
 <link rel="stylesheet" href="/assets/app.css" />
 </head>
 <body>
@@ -29,16 +29,17 @@
   </div>
 </header>
 
-<div class="container" id="banner-slot"></div>
+<div id="banner-slot"></div>
 
 <div class="container hero">
-  <span class="kicker">● 10 labs free, no account · the rest is priced per conversation</span>
+  <span class="kicker">● Free account · every lab in the catalogue · no card</span>
   <h1>Write code. <em>Run it.</em> See what did not work.</h1>
   <p class="lede">
     Anvil is a set of labs where you actually run something. Python runs in your
     browser (WebAssembly — nothing is sent to a server), and the checker tells you
     <b>which test passed, which failed, and why</b> instead of “wrong answer”.
-    Tracks: cybersecurity, Python, Ruby, Rust.
+    Sixteen labs across cybersecurity, Python, Ruby and Rust — all of them free
+    once you have an account, which takes a minute.
   </p>
   <div class="hero-actions">
     <a class="btn btn-primary" href="/lab">Start the first lab →</a>
@@ -48,22 +49,22 @@
   <div class="tracks" id="tracks">
     <a class="track" href="/lab?track=python">
       <div class="ic">🐍</div><h3>Python in your browser</h3>
-      <p>Real Python in WebAssembly. Parsers, checksums, layered encoding, spotting injection attempts — tests check the result, not your choice of keywords.</p>
-      <div class="tier">4 labs · nothing to install</div>
+      <p>Real Python in WebAssembly: log parsing, checksums, layered encoding, JWT decoding, SQL-injection detection, sliding-window rate limiting.</p>
+      <div class="tier">7 labs · nothing to install</div>
     </a>
     <a class="track" href="/lab?track=security">
       <div class="ic">🛡️</div><h3>Cybersecurity</h3>
-      <p>Name the technique from a log line, detect an injection, find the secret a service leaks into its own log — on a machine you start yourself.</p>
-      <div class="tier">4 labs · 2 run on the lab VM</div>
+      <p>Name the technique in a WAF log, detect an injection, count who is hammering the service, redact a card number, run a service that leaks its own secret.</p>
+      <div class="tier">6 labs · 3 on the lab VM</div>
     </a>
     <a class="track" href="/lab?track=rust">
       <div class="ic">🦀</div><h3>Rust</h3>
-      <p>Ownership and the borrow checker, with real compiler messages. Executable Rust in the lab machine, where <code>cargo</code> actually exists.</p>
-      <div class="tier">3 labs · quiz + VM</div>
+      <p>Ownership, <code>move</code>, and the borrow checker — with the compiler's real messages. Executable Rust in the lab machine, plus a safe eBPF wrapper to build.</p>
+      <div class="tier">4 labs · quiz + VM</div>
     </a>
     <a class="track" href="/lab?track=ruby">
       <div class="ic">💎</div><h3>Ruby</h3>
-      <p><code>Enumerable</code> instead of a loop, <code>gsub</code> with a block, masking card numbers in logs. You learn on a real 3.4 interpreter inside the lab machine.</p>
+      <p><code>Enumerable</code> instead of a loop, <code>gsub</code> with a block, masking card numbers in logs — on a real interpreter in the lab machine.</p>
       <div class="tier">2 labs · lab machine</div>
     </a>
   </div>
@@ -100,11 +101,11 @@
 <div class="container" style="margin-top:56px">
   <div class="locked" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
     <div style="flex:1 1 320px">
-      <h3>The deeper tracks: no price list, just a conversation</h3>
-      <p>The first ten labs are free and need no account. Past that the full tracks
-      begin — scanners, async, FFI into eBPF. We publish no prices because they depend
-      on what you actually need: custom labs for your team, a lab machine built around
-      your stack, or a private group.</p>
+      <h3>Paid work is custom, and priced per conversation</h3>
+      <p>The public catalogue is free for every account, and it stays that way. What we sell is
+      work: labs written for your team, a private group with your own track, or a lab machine
+      built around your stack. No price list — the scope decides the number, so we quote it in
+      a conversation.</p>
     </div>
     <a class="btn btn-primary" href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Let's talk</a>
   </div>

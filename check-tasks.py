@@ -89,7 +89,8 @@ def main():
             if not ok:
                 bad += 1
         elif ex == "vm":
-            ok = bool(t.get("vm_check")) and (t.get("free") is not True or bool(t.get("vm_accept")))
+            # katalog jest w pelni darmowy, wiec kazde zadanie VM musi miec komplet "check"
+            ok = bool(t.get("vm_check")) and bool(t.get("vm_accept"))
             print(f"  {'OK   ' if ok else 'BLAD '} {t['id']:24} zadanie VM")
             if not ok:
                 bad += 1
