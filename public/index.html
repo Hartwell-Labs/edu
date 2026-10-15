@@ -3,145 +3,139 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Anvil — interactive labs for security, Python, Ruby and Rust | Hartwell Labs</title>
-<meta name="description" content="Interactive labs you actually run: write code, execute it in the browser, get told exactly which test failed. Cybersecurity, Python, Ruby and Rust. First 10 labs free." />
+<title>Anvil — ucz się, uruchamiając kod</title>
+<meta name="description" content="Interaktywne laby: pisz kod, uruchom go w przeglądarce, zobacz który test nie przeszedł. Bezpieczeństwo, Python, Ruby, Rust. Pierwsze dziesięć labów bez konta." />
 <link rel="canonical" href="https://edu.hartwell-labs.pl/" />
-<meta name="theme-color" content="#0a0e14" />
-<meta property="og:title" content="Anvil — interactive labs" />
-<meta property="og:description" content="Write code. Run it. See which test failed. Cybersecurity, Python, Ruby, Rust." />
+<meta name="theme-color" content="#fdfcfb" />
+<meta property="og:title" content="Anvil — ucz się, uruchamiając kod" />
+<meta property="og:description" content="Pisz kod, uruchamiaj, ucz się na błędach. Pierwsze dziesięć labów bez konta." />
 <meta property="og:type" content="website" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
 <link rel="icon" type="image/svg+xml" href="https://hartwell-labs.pl/assets/favicon.svg" />
 <link rel="stylesheet" href="/assets/app.css" />
 </head>
 <body>
 <header>
   <div class="container header-in">
-    <a class="logo" href="/">
-      <svg width="22" height="22" viewBox="0 0 46 46" aria-hidden="true"><path d="M23,2 L42,13 L42,33 L23,44 L4,33 L4,13 Z" fill="none" stroke="#4f46e5" stroke-width="3.4" stroke-linejoin="round"/><polyline points="13,26 19,26 22,17 26,29 29,24 33,24" fill="none" stroke="#4f46e5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Anvil
-    </a>
+    <a class="brand" href="/"><span class="brand-mark">A</span><b>Anvil</b><span>interaktywne laby</span></a>
     <nav class="main">
-      <a href="#tracks">Tracks</a>
-      <a href="#how">How it works</a>
-      <a href="#vm">Lab VM</a>
-      <a href="/llms.txt">llms.txt</a>
+      <a href="#sciezki">Ścieżki</a>
+      <a href="#jak">Jak to działa</a>
+      <a href="#vm">Maszyna labowa</a>
     </nav>
-    <a class="header-cta" href="/lab">Open the lab</a>
+    <div class="who" id="who"></div>
   </div>
 </header>
 
 <div class="container hero">
-  <div class="eyebrow">Hartwell Labs · interactive education</div>
-  <h1>Write it. Run it. <span class="dim">Break it.</span></h1>
+  <span class="kicker">● 10 labów bez konta · reszta bez cennika, ustalamy w rozmowie</span>
+  <h1>Pisz kod. <em>Uruchom go.</em> Zobacz, co nie zadziałało.</h1>
   <p class="lede">
-    No videos, no quizzes about syntax. Every lab is a real task with a checker behind it:
-    you write code, it executes in your browser, and you find out which test failed and why.
-    Tracks for <b>cybersecurity</b>, <b>Python</b>, <b>Ruby</b> and <b>Rust</b>.
-    The first ten labs are free and need no account.
+    Anvil to laby, w których naprawdę coś uruchamiasz. Python działa w Twojej
+    przeglądarce (WebAssembly, nie wysyłasz nic na serwer), a checker mówi
+    <b>który test przeszedł, który nie i dlaczego</b> — zamiast „źle zrobiłeś".
+    Ścieżki: bezpieczeństwo, Python, Ruby, Rust.
   </p>
   <div class="hero-actions">
-    <a class="btn btn-primary" href="/lab">Start a lab</a>
-    <a class="btn btn-secondary" href="#tracks">See the tracks</a>
-    <a class="btn btn-secondary" href="#vm">Download the lab VM</a>
+    <a class="btn btn-primary" href="/lab">Zacznij pierwszy lab →</a>
+    <a class="btn btn-ghost" href="#sciezki">Zobacz ścieżki</a>
+  </div>
+
+  <div class="tracks" id="sciezki">
+    <a class="track" href="/lab?track=python">
+      <div class="ic">🐍</div><h3>Python w przeglądarce</h3>
+      <p>Prawdziwy Python w WebAssembly. Parsery, kryptografia, wykrywanie ataków — testy sprawdzają wynik, nie Twoje słowa kluczowe.</p>
+      <div class="tier">4 laby · bez instalacji</div>
+    </a>
+    <a class="track" href="/lab?track=security">
+      <div class="ic">🛡️</div><h3>Bezpieczeństwo</h3>
+      <p>Nazwij technikę z logu, wykryj wstrzyknięcie, znajdź wyciek sekretu w logu usługi, którą sam uruchomisz.</p>
+      <div class="tier">2 laby · 1 na maszynie wirtualnej</div>
+    </a>
+    <a class="track" href="/lab?track=rust">
+      <div class="ic">🦀</div><h3>Rust</h3>
+      <p>Ownership i borrow checker — z prawdziwymi komunikatami kompilatora. Wykonywalny Rust w maszynie labowej, gdzie działa <code>cargo</code>.</p>
+      <div class="tier">2 laby · quiz + VM</div>
+    </a>
+    <a class="track" href="/lab?track=ruby">
+      <div class="ic">💎</div><h3>Ruby</h3>
+      <p><code>Enumerable</code>, <code>gsub</code> z blokiem, maskowanie danych w logach. Uczysz się na interpreterze 3.4 w maszynie labowej.</p>
+      <div class="tier">2 laby · maszyna labowa</div>
+    </a>
   </div>
 </div>
 
-<div class="stats"><div class="container stats-in">
-  <div class="stat"><div class="n" id="s-labs">10</div><div class="l">labs in the free tier</div></div>
-  <div class="stat"><div class="n">4</div><div class="l">tracks: security, Python, Ruby, Rust</div></div>
-  <div class="stat"><div class="n">0</div><div class="l">accounts, e-mails, tracking</div></div>
-  <div class="stat"><div class="n">WASM</div><div class="l">executors in the browser</div></div>
-</div></div>
+<div class="container" id="jak" style="margin-top:52px">
+  <span class="kicker">Trzy zasady</span>
+  <div class="how">
+    <div class="card"><div class="num">01</div><h3>Nic nie ucieka z Twojej przeglądarki</h3>
+      <p>Kod i testy uruchamiają się u Ciebie. Na serwer leci tylko nick, postęp i informacja, które zadanie rozwiązałeś.</p></div>
+    <div class="card"><div class="num">02</div><h3>Błąd jest lekcją</h3>
+      <p>Dostajesz asercję, wartość oczekiwaną, wartość otrzymaną i linię, w której się nie zgadza. Podpowiedzi są po jednej i kosztują punkty — najpierw spróbuj sam.</p></div>
+    <div class="card"><div class="num">03</div><h3>Trudne laby dostają prawdziwą maszynę</h3>
+      <p>Potrzebne jądro, sieć albo kompilator? Ściągasz obraz maszyny labowej, uruchamiasz u siebie, a sprawdzanie działa offline przez <code>labcheck</code>.</p></div>
+  </div>
+</div>
 
-<section id="tracks"><div class="container">
-  <div class="section-head"><div class="kicker">Tracks</div>
-    <h2>Four tracks, one engine.</h2>
-    <p>Each task carries its own checker: test cases, output assertions or a single right answer that cannot be faked by pattern-matching a solution.</p>
+<div class="container" id="vm" style="margin-top:52px">
+  <span class="kicker">Maszyna labowa</span>
+  <h1 style="font-size:30px;margin:10px 0 12px">Część labów potrzebuje Linuksa, a nie karty</h1>
+  <p class="lede" style="margin-top:0">
+    Exploity, forensics, eBPF — tego nie da się zasymulować w przeglądarce.
+    Maszyna labowa to zwykły obraz, który budujesz albo ściągasz, uruchamiasz
+    lokalnie, a <code>labcheck</code> sprawdza rozwiązanie bez internetu.
+  </p>
+  <div class="cmd"><code>bash lab-vm/build.sh --host   # bez QEMU: weryfikuje wszystko lokalnie</code><button class="copy" data-code="bash lab-vm/build.sh --host">COPY</button></div>
+  <div class="cmd"><code>bash lab-vm/build.sh --run   # pełny obraz w QEMU</code><button class="copy" data-code="bash lab-vm/build.sh --run">COPY</button></div>
+  <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap">
+    <a class="btn btn-ghost btn-sm" href="/lab-vm/README.md">README maszyny</a>
+    <a class="btn btn-ghost btn-sm" href="/lab-vm/build.sh">build.sh</a>
   </div>
-  <div class="prod-grid">
-    <a class="prod" href="/lab?track=security"><div class="row"><h4>Cybersecurity</h4><span class="lang">linux · forensics · web</span></div>
-      <p>Read a log and name the technique. Spot the injection. Take apart a packet capture. The systems labs run in the downloadable VM, so you can break a real service.</p></a>
-    <a class="prod" href="/lab?track=python"><div class="row"><h4>Python</h4><span class="lang">pyodide · wasm</span></div>
-      <p>Real Python in the browser. Parsers, protocols, crypto primitives, data wrangling — checked with pytest-style assertions against your actual output.</p></a>
-    <a class="prod" href="/lab?track=ruby"><div class="row"><h4>Ruby</h4><span class="lang">opal · wasm</span></div>
-      <p>Blocks, mixins, enumerable, metaprogramming. Ruby compiled to JavaScript and executed in the page, with tests you can read.</p></a>
-    <a class="prod" href="/lab?track=rust"><div class="row"><h4>Rust</h4><span class="lang">ownership · lifetimes</span></div>
-      <p>Borrow checker puzzles, output prediction and real compiler diagnostics. Executable Rust lives in the lab VM, where cargo does the teaching.</p></a>
-  </div>
-</div></section>
+</div>
 
-<section id="how"><div class="container">
-  <div class="section-head"><div class="kicker">How it works</div>
-    <h2>Three rules, no fluff.</h2>
-  </div>
-  <div class="prod-grid">
-    <div class="prod"><div class="row"><h4>1 · It runs where you are</h4></div>
-      <p>Python runs in WebAssembly through Pyodide, Ruby through Opal. Nothing is sent to a server, nothing you paste leaves the tab. The checker runs in your browser too.</p></div>
-    <div class="prod"><div class="row"><h4>2 · The failure is the lesson</h4></div>
-      <p>You get the assertion, the expected value, the actual value and the line. Not a score. Hints are one at a time and they cost points, so you try the hard way first.</p></div>
-    <div class="prod"><div class="row"><h4>3 · Heavy labs get a real machine</h4></div>
-      <p>Anything that needs a kernel, a network or a compiler runs in the lab VM you download and run locally. Same image for everyone, reproducible, no cloud bill.</p></div>
-  </div>
-</div></section>
-
-<section id="vm"><div class="container">
-  <div class="section-head"><div class="kicker">Lab VM</div>
-    <h2>The part that needs a real machine.</h2>
-    <p>Exploitation, forensics, eBPF and anything else that cannot run in a tab ships as a downloadable virtual machine. You build it once or grab the image, run it locally, and the labs inside it check themselves.</p>
-  </div>
-  <div class="cmd"><code>bash lab-vm/build.sh          # zbuduj obraz qcow2 lokalnie</code><button class="cp" data-code="bash lab-vm/build.sh          # zbuduj obraz qcow2 lokalnie">COPY</button></div>
-  <div class="cmd"><code>bash lab-vm/build.sh --run     # zbuduj i odpal w QEMU</code><button class="cp" data-code="bash lab-vm/build.sh --run     # zbuduj i odpal w QEMU">COPY</button></div>
-  <div style="margin-top:22px;display:flex;gap:12px;flex-wrap:wrap">
-    <a class="btn btn-secondary" href="/lab-vm/README.md">lab-vm/README.md</a>
-    <a class="btn btn-secondary" href="/lab-vm/build.sh">build.sh</a>
-  </div>
-</div></section>
-
-<section id="cta"><div class="container">
-  <div class="prod cta">
-    <div>
-      <h4>Ten labs are free. The rest we agree on.</h4>
-      <p>No public price list. If you want the full track — private cohorts, custom labs for your team, or a lab VM built around your own stack — write to <a href="mailto:contact@hartwell-labs.pl">contact@hartwell-labs.pl</a>.</p>
+<div class="container" style="margin-top:56px">
+  <div class="locked" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+    <div style="flex:1 1 320px">
+      <h3>Dalsze ścieżki: bez cennika, po rozmowie</h3>
+      <p>Pierwsze dziesięć labów jest darmowych i nie wymaga konta. Poniżej zaczynają się
+      ścieżki pełne — skanery, async, FFI do eBPF. Nie publikujemy cen, bo zależą od tego,
+      czego potrzebujesz: własne laby dla zespołu, lab VM zbudowany pod Twój stack albo
+      prywatna grupa.</p>
     </div>
-    <div style="display:flex;gap:12px;flex-wrap:wrap">
-      <a class="btn btn-primary" href="/lab">Open the lab</a>
-      <a class="btn btn-secondary" href="mailto:contact@hartwell-labs.pl">Talk to us</a>
-    </div>
+    <a class="btn btn-primary" href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Porozmawiajmy</a>
   </div>
-</div></section>
+</div>
 
-<footer><div class="container footer-grid">
+<footer><div class="container f-grid">
   <div>
-    <div class="logo" style="margin-bottom:14px">
-      <svg width="20" height="20" viewBox="0 0 46 46" aria-hidden="true"><path d="M23,2 L42,13 L42,33 L23,44 L4,33 L4,13 Z" fill="none" stroke="#4f46e5" stroke-width="3.4" stroke-linejoin="round"/></svg> Hartwell Labs
-    </div>
-    <p class="about">Independent engineering company. Security systems, languages and tools — built in the open, MIT licensed.</p>
+    <div class="brand" style="margin-bottom:12px"><span class="brand-mark">A</span><b>Anvil</b></div>
+    <p style="color:var(--ink-3);font-size:14px;max-width:40ch">Interaktywne laby Hartwell Labs — Szczecin, Polska. Kod uczniów zostaje u niego.</p>
   </div>
-  <div><h5>Tracks</h5>
-    <a href="/lab?track=security">Cybersecurity</a>
+  <div><h5>Ścieżki</h5>
     <a href="/lab?track=python">Python</a>
-    <a href="/lab?track=ruby">Ruby</a>
+    <a href="/lab?track=security">Bezpieczeństwo</a>
     <a href="/lab?track=rust">Rust</a>
+    <a href="/lab?track=ruby">Ruby</a>
   </div>
-  <div><h5>Machine</h5>
-    <a href="/lab-vm/README.md">Lab VM</a>
-    <a href="/api/manifest">Task manifest (JSON)</a>
+  <div><h5>Narzędzia</h5>
+    <a href="/lab-vm/README.md">Maszyna labowa</a>
+    <a href="/api/manifest">Zadania (JSON)</a>
     <a href="/llms.txt">llms.txt</a>
   </div>
-  <div><h5>Company</h5>
+  <div><h5>Firma</h5>
     <a href="https://hartwell-labs.pl/">hartwell-labs.pl</a>
-    <a href="https://wiki.hartwell-labs.pl/">Documentation</a>
-    <a href="https://github.com/Hartwell-Labs">GitHub</a>
+    <a href="https://wiki.hartwell-labs.pl/">Dokumentacja</a>
+    <a href="https://github.com/Hartwell-Labs/edu">Kod źródłowy</a>
   </div>
 </div>
 <div class="container f-fine">
-  <span>© 2026 Hartwell Labs. Labs are MIT licensed unless stated otherwise.</span>
-  <span>Szczecin, Poland</span>
+  <span>© 2026 Hartwell Labs · laby na licencji MIT, chyba że zadanie stanowi inaczej</span>
+  <span>Szczecin, Polska</span>
 </div>
 </footer>
-<script src="/assets/site.js" defer></script>
+
+<script src="/assets/app.js" defer></script>
 </body>
 </html>

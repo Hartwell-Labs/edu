@@ -1,287 +1,417 @@
 /**
- * Anvil — silnik labów.
+ * Anvil — silnik labów + konta.
  *
- * Zasada: nic nie wychodzi z przeglądarki. Kod ucznia i testy wykonują się
- * lokalnie (Pyodide dla Pythona — runtime stoi na tej samej domenie), a wynik wraca jako JSON
- * z znacznikiem @@R@@. Postęp leży w localStorage i synchronizuje się
- * z /api/progress po anonimowym identyfikatorze (bez kont).
- *
- * Wykonawcy:
- *   pyodide — Python w WASM
- *   opal    — Ruby skompilowany do JS
- *   vm      — zadanie wymagające prawdziwej maszyny (pobrana VM)
- *   quiz    — jedna odpowiedź z listy (technika, protokół, pojęcie)
- *   predict — przewiduj wyjście programu
+ * Zasady:
+ *  - kod i testy wykonują się u ucznia (Python w WASM przez Pyodide); serwer
+ *    nigdy nie widzi kodu, który pisze,
+ *  - hasła: PBKDF2-SHA256 (210k) liczy przeglądarka, serwer dostaje sam
+ *    `verifier` i porównuje go w czasie stałym — Workers mają ~10 ms CPU,
+ *    hashowanie po stronie serwera wywracało się wyjątkiem 1101,
+ *  - postęp gościa w localStorage; po zalogowaniu migrujemy go na konto,
+ *  - brak telemetrii: nick, postęp i lista rozwiązanych zadań.
  */
 (function () {
   "use strict";
 
-  // Runtime siedzi na tej samej domenie — na stronie firmowej nie ładujemy kodu
-  // z CDN. CSP labu dopuszcza tylko 'self'.
   var PYODIDE_BASE = "/vendor/pyodide/";
   var MARK = "@@R@@";
+  var PBKDF2_ITERS = 210000;
+  var KEY = "anvil:";
 
-  var state = { tasks: [], byId: {}, current: null, progress: {}, pyodide: null, opal: null };
+  var S = { tasks: [], byId: {}, cur: null, progress: {}, user: null, streak: 0, pyodide: null };
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
 
-  /* ---------------------------------------------------------- storage */
-  function anonId() {
-    var k = "anvil-anon";
-    var v = localStorage.getItem(k);
-    if (!v) { v = (crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2); localStorage.setItem(k, v); }
-    return v;
-  }
-  function loadProgress() {
-    try { state.progress = JSON.parse(localStorage.getItem("anvil-progress-" + anonId()) || "{}"); }
-    catch (e) { state.progress = {}; }
-  }
-  function saveProgress() {
-    localStorage.setItem("anvil-progress-" + anonId(), JSON.stringify(state.progress));
-    try {
-      fetch("/api/progress", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-anon": anonId() },
-        body: JSON.stringify({ tasks: state.progress }),
-      });
-    } catch (e) { /* offline — zostaje localStorage */ }
-  }
-
-  /* ----------------------------------------------------------- render */
-  function el(id) { return document.getElementById(id); }
-  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
   function md(s) {
-    // bardzo mały podzbiór markdown: **kod**, \`kod\`, listy, akapity
-    return esc(s || "")
-      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-      .replace(/`(.+?)`/g, "<code>$1</code>")
-      .split(/\n{2,}/).map(function (p) { return "<p>" + p.replace(/\n/g, " ") + "</p>"; }).join("");
+    // inline: **bold**, `code`, bloki ```, listy
+    var blocks = String(s || "").split(/```(\w*)\n?([\s\S]*?)```/g);
+    var html = "";
+    for (var i = 0; i < blocks.length; i++) {
+      if (i % 3 === 2) { html += "<pre><code>" + esc(blocks[i]) + "</code></pre>"; continue; }
+      if (i % 3 === 1) continue;
+      html += blocks[i]
+        .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+        .replace(/`([^`]+?)`/g, "<code>$1</code>")
+        .split(/\n{2,}/)
+        .map(function (p) {
+          var lines = p.split("\n");
+          if (lines.every(function (l) { return /^\s*[-*]\s+/.test(l) || !l.trim(); })) {
+            return "<ul>" + lines.filter(function (l) { return l.trim(); })
+              .map(function (l) { return "<li>" + l.replace(/^\s*[-*]\s+/, "") + "</li>"; }).join("") + "</ul>";
+          }
+          return "<p>" + lines.join("<br>") + "</p>";
+        }).join("");
+    }
+    return html;
   }
 
-  function render() {
-    var q = new URLSearchParams(location.search);
-    var track = q.get("track");
-    renderSide(track);
-    var want = q.get("task");
-    var cur = (want && state.byId[want]) || state.current || state.tasks[0];
-    if (cur) open(cur.id);
-    else el("main").innerHTML = "<p>Brak zadań.</p>";
+  /* ------------------------------------------------------------- konta */
+  function derive(password, id) {
+    // sól jest jawna: to normalne dla haseł, a dzięki temu serwer nie musi
+    // liczyć KDF (limit CPU Workers) i nigdy nie widzi hasła.
+    var enc = new TextEncoder();
+    return crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"])
+      .then(function (key) {
+        return crypto.subtle.deriveBits(
+          { name: "PBKDF2", salt: enc.encode(KEY + id.toLowerCase()), iterations: PBKDF2_ITERS, hash: "SHA-256" },
+          key, 256);
+      })
+      .then(function (bits) {
+        return Array.from(new Uint8Array(bits)).map(function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+      });
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    return fetch(path, {
+      method: opts.method || "GET",
+      headers: Object.assign({ "content-type": "application/json" }, opts.headers || {}),
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      credentials: "same-origin",
+    }).then(function (r) { return r.json().catch(function () { return {}; }); });
+  }
+
+  function renderWho() {
+    var el = $("who");
+    if (!el) return;
+    if (S.user) {
+      el.innerHTML = '<a class="chip" href="/lab" title="Twój postęp"><span class="dot"></span>' +
+        "<b>" + esc(S.user.handle) + "</b>" +
+        (S.streak ? '<span class="streak">' + S.streak + " dni 🔥</span>" : "") + "</a>" +
+        '<button class="btn btn-ghost btn-sm" id="logout">Wyloguj</button>';
+      $("logout").addEventListener("click", function () {
+        api("/api/auth/logout", { method: "POST" }).then(function () {
+          S.user = null; S.progress = {}; saveLocal(); renderWho();
+        });
+      });
+    } else {
+      el.innerHTML = '<button class="btn btn-primary btn-sm" id="signin">Załóż konto</button>';
+      $("signin").addEventListener("click", function () { openAuth(); });
+    }
+  }
+
+  function openAuth(mode) {
+    mode = mode || "register";
+    var d = document.createElement("dialog");
+    d.innerHTML =
+      '<div class="dlg">' +
+      '<h2 id="t"></h2><p class="sub" id="s"></p>' +
+      '<div class="tabs"><button id="tab-r">Nowe konto</button><button id="tab-l">Mam konto</button></div>' +
+      '<form id="f" autocomplete="on">' +
+      '<div class="field" id="f-handle"><label for="i-handle">Nick</label><input id="i-handle" autocomplete="username" placeholder="np. bartosz"></div>' +
+      '<div class="field" id="f-email"><label for="i-email">E-mail</label><input id="i-email" type="email" autocomplete="email" placeholder="ty@example.com"></div>' +
+      '<div class="field"><label for="i-pass">Hasło</label><input id="i-pass" type="password" autocomplete="current-password" placeholder="min. 10 znaków"></div>' +
+      '<div class="err" id="e"></div>' +
+      '<div class="foot"><button class="btn btn-primary" id="go" type="submit"></button>' +
+      '<button class="btn btn-ghost" type="button" id="cancel">Anuluj</button></div>' +
+      '<p class="note">Konto trzyma tylko Twój nick, postęp i kod zadań. Bez newslettera, bez telemetrii, bez reklam. Hasło nigdy nie opuszcza przeglądarki — serwer dostaje tylko jego pochodną.</p>' +
+      "</form></div>";
+    document.body.appendChild(d);
+    var mode_ = mode;
+    var paint = function () {
+      var reg = mode_ === "register";
+      $("t", d).textContent = reg ? "Załóż konto" : "Wróć do nauki";
+      $("s", d).textContent = reg ? "Trzy minuty, a postęp nie przepadnie po zamknięciu przeglądarki." : "Podaj nick albo e-mail i hasło.";
+      $("f-handle", d).style.display = reg ? "" : "none";
+      $("f-email", d).style.display = reg ? "" : "none";
+      $("f-handle", d).querySelector("label").textContent = reg ? "Nick (3–24 znaki)" : "";
+      $("i-pass", d).setAttribute("autocomplete", reg ? "new-password" : "current-password");
+      $("go", d).textContent = reg ? "Utwórz konto" : "Zaloguj";
+      $("tab-r", d).className = reg ? "on" : "";
+      $("tab-l", d).className = reg ? "" : "on";
+      $("e", d).textContent = "";
+    };
+    paint();
+    d.showModal();
+    $("tab-r", d).addEventListener("click", function () { mode_ = "register"; paint(); });
+    $("tab-l", d).addEventListener("click", function () { mode_ = "login"; paint(); });
+    $("cancel", d).addEventListener("click", function () { d.close(); d.remove(); });
+    $("f", d).addEventListener("submit", function (e) {
+      e.preventDefault();
+      var pass = $("i-pass", d).value;
+      var err = $("e", d);
+      if (pass.length < 10) { err.textContent = "Hasło musi mieć co najmniej 10 znaków."; return; }
+      var btn = $("go", d); btn.disabled = true; btn.textContent = "Chwilka…";
+      err.textContent = "";
+      var go = mode_ === "register"
+        ? (function () {
+            var handle = $("i-handle", d).value.trim().toLowerCase();
+            var email = $("i-email", d).value.trim().toLowerCase();
+            return derive(pass, handle).then(function (v) {
+              return api("/api/auth/register", { method: "POST", body: { handle: handle, email: email, verifier: v, password_length: pass.length } });
+            });
+          })()
+        : (function () {
+            var id = $("i-handle", d).value.trim() || $("i-email", d).value.trim();
+            return derive(pass, id).then(function (v) {
+              return api("/api/auth/login", { method: "POST", body: { id: id, verifier: v } });
+            });
+          })();
+      go.then(function (res) {
+        if (res.error || !res.ok) { err.textContent = res.error || "Nie udało się."; btn.disabled = false; paint0(); return; }
+        return api("/api/me").then(function (me) {
+          S.user = me.user; S.progress = me.progress || {}; S.streak = (me.streak && me.streak.days) || 0;
+          localStorage.removeItem(KEY + "progress:" + (me.user ? me.user.handle : "guest"));
+          if (mode_ === "register") {
+            return api("/api/progress/merge", { method: "POST", body: { tasks: readLocalGuest() } })
+              .then(function (r) { S.progress = r.progress || S.progress; });
+          }
+        }).then(function () { d.close(); d.remove(); renderWho(); bootLab(); });
+      }).catch(function () { err.textContent = "Coś poszło nie tak z siecią."; btn.disabled = false; });
+      var paint0 = function () { btn.disabled = false; btn.textContent = mode_ === "register" ? "Utwórz konto" : "Zaloguj"; };
+    });
+  }
+
+  /* ---------------------------------------------------------- postęp */
+  function readLocalGuest() {
+    try { return JSON.parse(localStorage.getItem(KEY + "progress:guest") || "{}"); } catch (e) { return {}; }
+  }
+  function saveLocal() {
+    localStorage.setItem(KEY + "progress:" + (S.user ? S.user.handle : "guest"), JSON.stringify(S.progress));
+  }
+
+  function markDone(t, hints, points) {
+    var s = S.progress[t.id] || (S.progress[t.id] = {});
+    s.passed = true;
+    s.points = Math.max(10, (t.points || 100) - hints * 25);
+    s.attempts = (s.attempts || 0) + 1;
+    saveLocal();
+    if (S.user) {
+      api("/api/progress", { method: "POST", body: { task: { id: t.id, passed: true, points: s.points, attempts: s.attempts, hints: hints, code: (S.progress[t.id] || {}).code } } })
+        .then(function () { return api("/api/me"); })
+        .then(function (me) { if (me.user) { S.streak = (me.streak && me.streak.days) || 0; renderWho(); renderSide(); } });
+    }
+    renderSide();
+  }
+
+  function saveCode(t, code) {
+    var s = S.progress[t.id] || (S.progress[t.id] = {});
+    s.code = code;
+    saveLocal();
+  }
+
+  /* ------------------------------------------------------------ UI */
+  function points(t) {
+    var st = S.progress[t.id] || {};
+    return Math.max(10, (t.points || 100) - (st.hints || 0) * 25);
   }
 
   function renderSide(filter) {
-    var byTrack = {};
-    state.tasks.forEach(function (t) { (byTrack[t.track] = byTrack[t.track] || []).push(t); });
-    var labels = { security: "Cybersecurity", python: "Python", ruby: "Ruby", rust: "Rust" };
+    var el = $("side");
+    if (!el) return;
+    var by = {};
+    S.tasks.forEach(function (t) { (by[t.track] = by[t.track] || []).push(t); });
+    var labels = { security: "Bezpieczeństwo", python: "Python", ruby: "Ruby", rust: "Rust" };
     var html = "";
-    Object.keys(byTrack).forEach(function (k) {
+    Object.keys(by).forEach(function (k) {
       if (filter && k !== filter) return;
-      html += "<h3>" + (labels[k] || k) + "</h3>";
-      byTrack[k].forEach(function (t) {
-        var st = state.progress[t.id];
-        var cls = "task-item" + (state.current && state.current.id === t.id ? " active" : "") + (st && st.passed ? " done" : "") + (st && st.hints ? " hinted" : "");
+      var done = by[k].filter(function (t) { return (S.progress[t.id] || {}).passed; }).length;
+      html += "<h3>" + (labels[k] || k) + ' <span style="color:var(--ink-3)">' + done + "/" + by[k].length + "</span></h3>";
+      by[k].forEach(function (t) {
+        var st = S.progress[t.id] || {};
+        var cls = "task" + (S.cur && S.cur.id === t.id ? " active" : "") + (st.passed ? " done" : "") + (st.hints ? " hinted" : "");
         html += '<button class="' + cls + '" data-id="' + t.id + '">' +
-          '<span class="task-dot"></span><span>' + esc(t.title) + "</span>" +
-          (t.free === false ? '<span class="task-free">LOCKED</span>' : "") + "</button>";
+          '<span class="mark">' + (st.passed ? "✓" : st.hints ? "!" : "") + "</span>" +
+          "<span>" + esc(t.title) + "</span>" +
+          (t.free === false ? '<span class="lock">🔒</span>' : "") + "</button>";
       });
     });
-    el("side").innerHTML = html;
-    el("side").querySelectorAll(".task-item").forEach(function (b) {
+    el.innerHTML = html;
+    el.querySelectorAll(".task").forEach(function (b) {
       b.addEventListener("click", function () { open(b.getAttribute("data-id")); });
     });
   }
 
-  function score(t) {
-    var st = state.progress[t.id] || {};
-    var hints = st.hints || 0;
-    return Math.max(10, (t.points || 100) - hints * 25);
-  }
-
   function open(id) {
-    var t = state.byId[id];
+    var t = S.byId[id];
     if (!t) return;
-    state.current = t;
+    S.cur = t;
     var url = new URL(location.href);
     url.searchParams.set("task", id);
     history.replaceState(null, "", url);
     renderSide(url.searchParams.get("track"));
+    var st = S.progress[id] || {};
+    var labels = { security: "Bezpieczeństwo", python: "Python", ruby: "Ruby", rust: "Rust" };
+    var m = $("main");
+    if (!m) return;
 
-    var st = state.progress[t.id] || {};
-    var main = el("main");
-    var meta = '<span>' + (t.executor === "pyodide" ? "Python · WASM" : t.executor === "opal" ? "Ruby · WASM" : t.executor === "vm" ? "lab VM" : "wyjaśnienie") + "</span>" +
-      '<span>trudność ' + new Array(t.difficulty + 1).join("●") + "</span>" +
-      '<span>' + (t.free === false ? "poza darmowym tierem" : "w darmowym tierze") + "</span>";
+    var head =
+      '<div class="crumb">' + (labels[t.track] || t.track) + "</div>" +
+      '<h1>' + esc(t.title) + "</h1>" +
+      '<div class="meta"><span>' + (t.executor === "pyodide" ? "Python · WebAssembly" : t.executor === "vm" ? "maszyna labowa" : "wyjaśnienie") + "</span>" +
+      "<span>trudność " + new Array(t.difficulty + 1).join("●") + "</span>" +
+      "<span>" + (t.free === false ? "poza darmowym tierem" : "w darmowym tierze") + "</span>" +
+      (st.passed ? '<span style="color:var(--mint);font-weight:600">✓ rozwiązane · ' + (st.points || points(t)) + " pkt</span>" : "") +
+      "</div>" +
+      '<div class="brief">' + md(t.brief) + "</div>";
 
-    var body = "";
+    var body;
     if (t.free === false) {
-      body = '<div class="out"><div class="out-head">locked</div><pre>' +
-        esc("To zadanie jest poza pierwszymi dziesięcioma.\n\nNie mamy cennika — zależnie od zakresu (kohorty prywatne, laby pod Twój stack, lab VM zbudowany wokół Twojej infrastruktury) ustalamy to w rozmowie.\n\ncontact@hartwell-labs.pl") +
-        '</pre></div><div style="margin-top:14px"><a class="btn btn-primary" href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Zapytaj o dostęp</a></div>';
+      body = '<div class="locked"><h3>Ta ścieżka jest już poza pierwszymi dziesięcioma</h3>' +
+        "<p>Nie mamy cennika — zależnie od zakresu (laby pod Twój stack, grupa prywatna, maszyna zbudowana wokół Twojej infrastruktury) ustalamy to w rozmowie. Pierwsze dziesięć labów zostaje darmowe.</p>" +
+        '<a class="btn btn-primary" href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Zapytaj o dostęp</a></div>';
     } else if (t.executor === "quiz") {
-      body = '<div class="choice" id="choice"></div>' +
-        '<div class="out" id="out" hidden><div class="out-head" id="outhead"></div><pre id="outbody"></pre></div>';
+      body = '<div class="choices" id="choices"></div><div class="out" id="out" hidden><div class="out-head" id="outhead"></div><pre id="outbody"></pre></div>';
     } else if (t.executor === "vm") {
-      body = md(t.brief) +
-        '<div class="run-bar"><code class="mono" style="background:var(--bg-subtle);border:1px solid var(--border);border-radius:6px;padding:8px 11px">' + esc(t.vm_check || "") + '</code></div>' +
+      body = '<div class="runbar"><code class="mono" style="background:var(--bg-soft);border:1px solid var(--line);border-radius:10px;padding:10px 13px">' + esc(t.vm_check || "") + "</code>" +
+        '<button class="btn btn-ghost" id="vmcheck">Sprawdź wynik</button></div>' +
         '<div class="out" id="out" hidden><div class="out-head" id="outhead"></div><pre id="outbody"></pre></div>';
-    } else if (t.executor === "pyodide" || t.executor === "opal") {
-      body = md(t.brief) +
-        '<div class="editor-wrap"><textarea class="code" id="code" spellcheck="false" aria-label="Edytor kodu">' + esc(st.code || t.starter || "") + "</textarea></div>" +
-        '<div class="run-bar"><button class="btn btn-primary" id="run">Uruchom</button>' +
-        '<button class="btn btn-secondary" id="reset">Reset</button>' +
-        '<button class="btn btn-secondary" id="hint">Podpowiedź (−25 pkt)</button>' +
-        '<span class="scorebar">Twój wynik <b id="pts">' + score(t) + "</b></span></div>" +
-        '<div class="out" id="out" hidden><div class="out-head" id="outhead">wynik</div><pre id="outbody"></pre></div>';
     } else {
-      body = md(t.brief);
+      body = '<div class="editor"><textarea class="code" id="code" spellcheck="false" aria-label="Edytor kodu">' +
+        esc(st.code || t.starter || "") + "</textarea></div>" +
+        '<div class="runbar">' +
+        '<button class="btn btn-primary" id="run">Uruchom testy</button>' +
+        '<button class="btn btn-ghost" id="reset">Wyczyść</button>' +
+        '<button class="btn btn-ghost" id="hint">Podpowiedź</button>' +
+        '<span class="score">Twój wynik <b id="pts">' + points(t) + "</b></span></div>" +
+        '<div class="out" id="out" hidden><div class="out-head" id="outhead">gotowe</div><pre id="outbody"></pre></div>';
     }
 
-    main.innerHTML =
-      '<div class="lab-head"><h1>' + esc(t.title) + "</h1>" +
-      '<div class="lab-meta">' + meta + "</div></div>" +
-      '<div class="brief">' + md(t.brief) + "</div>" + body +
-      (st.passed ? '<div class="out pass" style="margin-top:16px"><div class="out-head">zaliczone</div><pre>Rozwiązanie przyjęte. Wynik: ' + (st.points || score(t)) + " pkt." + "</pre></div>" : "");
-
-    wire(t, st);
+    m.innerHTML = head + body + (st.passed && t.executor !== "quiz"
+      ? '<div class="out pass" style="margin-top:18px"><div class="out-head">✓ rozwiązane</div><pre>Dobrze. Kod i wynik zapisane — możesz wrócić do tego labu, kiedy chcesz.</pre></div>'
+      : "");
+    wire(t);
   }
 
-  function wire(t, st) {
-    var code = el("code");
-    if (code) code.addEventListener("input", function () {
-      var s = state.progress[t.id] || (state.progress[t.id] = {});
-      s.code = code.value;
-      saveProgress();
+  function wire(t) {
+    var code = $("code");
+    if (code) code.addEventListener("input", function () { saveCode(t, code.value); });
+    var run = $("run"); if (run) run.addEventListener("click", function () { runTask(t); });
+    var rst = $("reset"); if (rst) rst.addEventListener("click", function () {
+      code.value = t.starter || ""; saveCode(t, code.value);
+      code.dispatchEvent(new Event("input"));
     });
-    var run = el("run"); if (run) run.addEventListener("click", function () { runTask(t); });
-    var rst = el("reset"); if (rst) rst.addEventListener("click", function () { el("code").value = t.starter || ""; el("code").dispatchEvent(new Event("input")); });
-    var hnt = el("hint"); if (hnt) hnt.addEventListener("click", function () { showHint(t); });
-    var vm = el("vmcheck"); if (vm) vm.addEventListener("click", function () { vmTask(t); });
-    var ch = el("choice");
-    if (ch) ch.innerHTML = t.choices.map(function (c, i) { return "<button data-i=\"" + i + "\">" + esc(c) + "</button>"; }).join("");
-    ch && ch.querySelectorAll("button").forEach(function (b) {
-      b.addEventListener("click", function () { answer(t, parseInt(b.getAttribute("data-i"), 10), b); });
-    });
+    var hnt = $("hint"); if (hnt) hnt.addEventListener("click", function () { hint(t); });
+    var vm = $("vmcheck"); if (vm) vm.addEventListener("click", function () { vmCheck(t); });
+    var ch = $("choices");
+    if (ch) {
+      ch.innerHTML = t.choices.map(function (c, i) { return "<button data-i=\"" + i + "\">" + esc(c) + "</button>"; }).join("");
+      ch.querySelectorAll("button").forEach(function (b) {
+        b.addEventListener("click", function () { answer(t, +b.dataset.i, b); });
+      });
+    }
   }
 
-  function showHint(t) {
-    var s = state.progress[t.id] || (state.progress[t.id] = {});
-    var used = s.hints || 0;
+  function hint(t) {
+    var st = S.progress[t.id] || (S.progress[t.id] = {});
+    var used = st.hints || 0;
     if (used >= (t.hints || []).length) return;
-    s.hints = used + 1;
-    saveProgress();
+    st.hints = used + 1; saveLocal();
     var box = document.createElement("div");
-    box.className = "hintbox";
-    box.innerHTML = "<p><b>Podpowiedź " + (used + 1) + ":</b> " + md(t.hints[used]) + "</p>";
-    el("main").appendChild(box);
-    var pts = el("pts"); if (pts) pts.textContent = score(t);
+    box.className = "hint";
+    box.innerHTML = "<b>Podpowiedź " + (used + 1) + " z " + t.hints.length + " (−" + 25 * st.hints + " pkt)</b>" + md(t.hints[used]);
+    $("main").appendChild(box);
+    var p = $("pts"); if (p) p.textContent = points(t);
+    renderSide(new URLSearchParams(location.search).get("track"));
+  }
+
+  function out(kind, text) {
+    var o = $("out"); if (!o) return;
+    o.hidden = false;
+    o.className = "out " + (kind === "pass" ? "pass" : kind === "busy" ? "busy" : "fail");
+    $("outhead").textContent = kind === "pass" ? "✓ wszystko przeszło" : kind === "busy" ? "uruchamiam" : "jeszcze nie";
+    $("outbody").textContent = text;
   }
 
   function answer(t, i, btn) {
     var ok = (t.answer || []).indexOf(i) !== -1;
-    btn.classList.add(ok ? "correct" : "wrong");
-    if (!ok) { el("choice").querySelectorAll("button").forEach(function (b) { if ((t.answer || []).indexOf(parseInt(b.getAttribute("data-i"), 10)) !== -1) b.classList.add("correct"); }); }
-    showOut(ok ? "correct" : "wrong", ok ? "Poprawnie." + (t.explain ? "\n\n" + t.explain : "") : "Nie. Poprawna odpowiedź jest zaznaczona." + (t.explain ? "\n\n" + t.explain : ""));
+    btn.classList.add(ok ? "right" : "nope");
+    if (!ok) $("choices").querySelectorAll("button").forEach(function (b) {
+      if ((t.answer || []).indexOf(+b.dataset.i) !== -1) b.classList.add("right");
+    });
+    out(ok ? "pass" : "fail", (ok ? "Dokładnie.\n\n" : "Zobacz zaznaczoną odpowiedź.\n\n") + (t.explain || ""));
+    if (ok) markDone(t, (S.progress[t.id] || {}).hints || 0);
+  }
+
+  function vmCheck(t) {
+    var v = prompt("Wklej wynik polecenia z maszyny labowej:");
+    if (v == null) return;
+    var ok = (t.vm_accept || []).some(function (s) { return String(v).indexOf(s) !== -1; });
+    out(ok ? "pass" : "fail", ok
+      ? "Maszyna potwierdziła rozwiązanie. Zaliczone."
+      : "To nie jest oczekiwany wynik. Zajrzyj do README maszyny labowej i spróbuj raz jeszcze.");
     if (ok) markDone(t, 0);
   }
 
-  function markDone(t, hints) {
-    var s = state.progress[t.id] || (state.progress[t.id] = {});
-    s.passed = true;
-    s.points = Math.max(10, (t.points || 100) - hints * 25);
-    saveProgress();
-    renderSide(new URLSearchParams(location.search).get("track"));
-  }
-
-  function showOut(kind, text) {
-    var o = el("out"); if (!o) return;
-    o.hidden = false;
-    o.className = "out " + (kind === "correct" || kind === "pass" ? "pass" : "fail");
-    el("outhead").textContent = kind === "correct" || kind === "pass" ? "accepted" : kind === "busy" ? "running" : "failed";
-    el("outbody").textContent = text;
-  }
-
-  /* ---------------------------------------------------------- runtimes */
-  function loadScript(src) {
-    return new Promise(function (res, rej) {
-      var s = document.createElement("script");
-      s.src = src; s.onload = res; s.onerror = function () { rej(new Error("nie udało się załadować " + src)); };
-      document.head.appendChild(s);
-    });
-  }
-
-  function ensurePyodide() {
-    if (state.pyodide) return Promise.resolve(state.pyodide);
-    showOut("busy", "Pobieram Pythona w WebAssembly (jednorazowo, ~12 MB)…");
+  /* ------------------------------------------------------- wykonawcy */
+  function loadPyodide() {
+    if (S.pyodide) return Promise.resolve(S.pyodide);
+    out("busy", "Pierwsze uruchomienie pobiera Pythona w WebAssembly (~12 MB, jednorazowo)…");
     return import(PYODIDE_BASE + "pyodide.mjs")
-      .then(function (mod) {
-        return mod.loadPyodide({ indexURL: PYODIDE_BASE });
-      })
-      .then(function (py) { state.pyodide = py; return py; });
+      .then(function (m) { return m.loadPyodide({ indexURL: PYODIDE_BASE }); })
+      .then(function (py) { S.pyodide = py; return py; });
   }
 
   function runTask(t) {
-    var src = el("code").value;
-    var s = state.progress[t.id] || (state.progress[t.id] = {});
-    s.code = src;
-    saveProgress();
-    showOut("busy", "Uruchamiam…");
-    ensurePyodide()
-      .then(function () { return runPython(src, t.tests, t.setup); })
-      .then(function (r) { grade(t, r); })
-      .catch(function (e) { showOut("fail", "Błąd wykonania:\n" + (e && e.message ? e.message : String(e))); });
+    var src = $("code").value;
+    saveCode(t, src);
+    var st = S.progress[t.id] || (S.progress[t.id] = {});
+    st.attempts = (st.attempts || 0) + 1; saveLocal();
+    out("busy", "Uruchamiam testy…");
+    loadPyodide().then(function () {
+      return S.pyodide.runPythonAsync([
+        "import json",
+        "def check(name, ok, detail=''):",
+        "    __R__.append({'name': name, 'ok': bool(ok), 'detail': str(detail)[:300]})",
+        "__R__ = []",
+        t.setup || "",
+        src,
+        "",
+        t.tests || "",
+        "",
+        "print(" + JSON.stringify(MARK) + " + json.dumps(__R__))",
+      ].join("\n"));
+    }).then(function (o) {
+      var text = String(o), i = text.lastIndexOf(MARK);
+      if (i === -1) { out("fail", "Testy nie zgłosiły wyniku. Użyj check(...), żeby sprawdzić swoją logikę."); return; }
+      var checks = JSON.parse(text.slice(i + MARK.length));
+      var std = text.slice(0, i).trim();
+      var failed = checks.filter(function (c) { return !c.ok; });
+      var lines = checks.map(function (c) {
+        return (c.ok ? "  ✓  " : "  ✗  ") + c.name + (c.detail ? "\n        " + c.detail : "");
+      });
+      if (std) lines.unshift("--- twoje wydruki ---\n" + std + "\n");
+      if (!failed.length) { out("pass", lines.join("\n")); markDone(t, st.hints || 0); }
+      else out("fail", lines.join("\n") + "\n\nPopraw i uruchom ponownie — każda iteracja to nauka, nie porażka.");
+    }).catch(function (e) { out("fail", "Błąd wykonania:\n" + (e && e.message ? e.message : String(e))); });
   }
 
-  function runPython(user, tests, setup) {
-    return state.pyodide.runPythonAsync([
-      "import json, sys",
-      "def check(name, ok, detail=''):",
-      "    __R__.append({'name': name, 'ok': bool(ok), 'detail': str(detail)[:300]})",
-      "__R__ = []",
-      setup || "",
-      user,
-      "",
-      tests || "",
-      "",
-      "print(" + JSON.stringify(MARK) + " + json.dumps(__R__))"
-    ].join("\n")).then(function (out) { return parse(out); });
+  /* ------------------------------------------------------------ start */
+  function bootLab() {
+    if ($("side") && S.cur) open(S.cur.id);
+    else renderSide(new URLSearchParams(location.search).get("track"));
   }
 
-  function parse(text) {
-    var i = String(text).lastIndexOf(MARK);
-    if (i === -1) return { checks: [], stdout: text };
-    return { checks: JSON.parse(text.slice(i + MARK.length)), stdout: text.slice(0, i) };
-  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest(".copy");
+    if (!b) return;
+    navigator.clipboard.writeText(b.dataset.code).then(function () {
+      var t = b.textContent; b.textContent = "✓"; setTimeout(function () { b.textContent = t; }, 1400);
+    });
+  });
 
-  function grade(t, r) {
-    var checks = r.checks || [];
-    var failed = checks.filter(function (c) { return !c.ok; });
-    var lines = checks.map(function (c) { return (c.ok ? "  PASS  " : "  FAIL  ") + c.name + (c.detail ? "\n        " + c.detail : ""); });
-    if (r.stdout && r.stdout.trim()) lines.unshift("--- stdout ---\n" + r.stdout.trim() + "\n");
-    if (!checks.length) { showOut("fail", "Testy nie zgłosiły żadnego wyniku. Uruchom `check(...)` w swoim kodzie.\n\n" + r.stdout); return; }
-    if (!failed.length) {
-      showOut("pass", lines.join("\n"));
-      var st = state.progress[t.id] || {};
-      markDone(t, st.hints || 0);
-    } else {
-      showOut("fail", lines.join("\n"));
+  Promise.all([
+    fetch("/api/manifest").then(function (r) { return r.json(); }),
+    fetch("/api/me").then(function (r) { return r.json(); }).catch(function () { return {}; }),
+  ]).then(function (res) {
+    var data = res[0] || {};
+    S.tasks = data.tasks || [];
+    S.byId = {};
+    S.tasks.forEach(function (t) { S.byId[t.id] = t; });
+    var me = res[1] || {};
+    S.user = me.user || null;
+    S.streak = (me.streak && me.streak.days) || 0;
+    S.progress = S.user ? (me.progress || {}) : readLocalGuest();
+
+    var q = new URLSearchParams(location.search);
+    var want = q.get("task");
+    S.cur = (want && S.byId[want]) || null;
+    renderWho();
+    if ($("side")) {
+      renderSide(q.get("track"));
+      if (S.cur) open(S.cur.id);
     }
-  }
-
-  function vmTask(t) {
-    showOut("busy", "To zadanie sprawdza się na maszynie wirtualnej.\n\n" + (t.vm_check || "") + "\n\nUruchom w lab VM i wklej tutaj wynik:");
-    var v = prompt("Wklej wynik komendy weryfikującej:");
-    if (v == null) return;
-    var ok = (t.vm_accept || []).some(function (s) { return String(v).indexOf(s) !== -1; });
-    showOut(ok ? "pass" : "fail", ok ? "Zaliczone — maszyna zrobiła to, co trzeba." : "Nie pasuje. Sprawdź, czy skonfigurowałeś usługę zgodnie z briefem.");
-    if (ok) markDone(t, 0);
-  }
-
-  /* --------------------------------------------------------------- boot */
-  fetch("/api/manifest")
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      state.tasks = data.tasks || [];
-      state.byId = {};
-      state.tasks.forEach(function (t) { state.byId[t.id] = t; });
-      loadProgress();
-      render();
-    })
-    .catch(function () { el("main").innerHTML = "<p>Nie udało się pobrać zadań. Sprawdź połączenie.</p>"; });
+  }).catch(function () {
+    var m = $("main"); if (m) m.innerHTML = "<p>Nie udało się pobrać zadań. Sprawdź połączenie i odśwież.</p>";
+  });
 })();
