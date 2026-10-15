@@ -1,14 +1,15 @@
 /**
- * Anvil — silnik labów + konta.
+ * Anvil — lab engine + accounts.
  *
- * Zasady:
- *  - kod i testy wykonują się u ucznia (Python w WASM przez Pyodide); serwer
- *    nigdy nie widzi kodu, który pisze,
- *  - hasła: PBKDF2-SHA256 (210k) liczy przeglądarka, serwer dostaje sam
- *    `verifier` i porównuje go w czasie stałym — Workers mają ~10 ms CPU,
- *    hashowanie po stronie serwera wywracało się wyjątkiem 1101,
- *  - postęp gościa w localStorage; po zalogowaniu migrujemy go na konto,
- *  - brak telemetrii: nick, postęp i lista rozwiązanych zadań.
+ * Rules:
+ *  - code and tests run on the student's machine (Python via Pyodide/WASM); the
+ *    server never sees the code being written,
+ *  - passwords: the browser runs PBKDF2-SHA256 (210k) and sends only the
+ *    `verifier`; the server compares it in constant time — Workers have ~10 ms
+ *    of CPU and hashing server-side died with exception 1101,
+ *  - guest progress lives in localStorage; on sign-in it is merged into the
+ *    account,
+ *  - no telemetry: nickname, progress and the list of solved tasks.
  */
 (function () {
   "use strict";
@@ -17,13 +18,17 @@
   var MARK = "@@R@@";
   var PBKDF2_ITERS = 210000;
   var KEY = "anvil:";
+  var TRACK_LABELS = { security: "Cybersecurity", python: "Python", ruby: "Ruby", rust: "Rust" };
 
   var S = { tasks: [], byId: {}, cur: null, progress: {}, user: null, streak: 0, pyodide: null };
-  var $ = function (id) { return document.getElementById(id); };
+  var $ = function (id, root) { return (root || document).getElementById(id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
 
+  /** Premium (plan !== free) opens the tasks past the free ten. */
+  function unlocked(t) { return t.free !== false || (S.user && S.user.plan && S.user.plan !== "free"); }
+
   function md(s) {
-    // inline: **bold**, `code`, bloki ```, listy
+    // inline: **bold**, `code`, fenced blocks, bullet lists
     var blocks = String(s || "").split(/```(\w*)\n?([\s\S]*?)```/g);
     var html = "";
     for (var i = 0; i < blocks.length; i++) {
@@ -45,10 +50,10 @@
     return html;
   }
 
-  /* ------------------------------------------------------------- konta */
+  /* ------------------------------------------------------------- accounts */
   function derive(password, id) {
-    // sól jest jawna: to normalne dla haseł, a dzięki temu serwer nie musi
-    // liczyć KDF (limit CPU Workers) i nigdy nie widzi hasła.
+    // The salt is public, as salts are for passwords — and it means the server
+    // runs no KDF (Workers CPU limit) and never sees the password.
     var enc = new TextEncoder();
     return crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"])
       .then(function (key) {
@@ -71,23 +76,59 @@
     }).then(function (r) { return r.json().catch(function () { return {}; }); });
   }
 
+  function refreshMe() {
+    return api("/api/me").then(function (me) {
+      S.user = me.user || null;
+      S.streak = (me.streak && me.streak.days) || 0;
+      if (S.user) S.progress = me.progress || {};
+      renderWho();
+      renderBanner();
+      renderSide(trackParam());
+      return me;
+    });
+  }
+
   function renderWho() {
     var el = $("who");
     if (!el) return;
     if (S.user) {
-      el.innerHTML = '<a class="chip" href="/lab" title="Twój postęp"><span class="dot"></span>' +
+      var plan = S.user.plan && S.user.plan !== "free"
+        ? '<span class="streak" title="Lifetime access">' + esc(S.user.plan) + "</span>"
+        : (S.user.email_verified ? "" : '<span class="warndot" title="E-mail not confirmed">!</span>');
+      el.innerHTML = '<a class="chip" href="/lab" title="Your progress"><span class="dot"></span>' +
         "<b>" + esc(S.user.handle) + "</b>" +
-        (S.streak ? '<span class="streak">' + S.streak + " dni 🔥</span>" : "") + "</a>" +
-        '<button class="btn btn-ghost btn-sm" id="logout">Wyloguj</button>';
+        (S.streak ? '<span class="streak">' + S.streak + "d 🔥</span>" : "") + plan + "</a>" +
+        '<button class="btn btn-ghost btn-sm" id="logout">Sign out</button>';
       $("logout").addEventListener("click", function () {
         api("/api/auth/logout", { method: "POST" }).then(function () {
-          S.user = null; S.progress = {}; saveLocal(); renderWho();
+          S.user = null; S.progress = readLocalGuest(); renderWho(); renderBanner();
+          renderSide(trackParam()); if (S.cur) open(S.cur.id);
         });
       });
     } else {
-      el.innerHTML = '<button class="btn btn-primary btn-sm" id="signin">Załóż konto</button>';
+      el.innerHTML = '<button class="btn btn-primary btn-sm" id="signin">Create account</button>';
       $("signin").addEventListener("click", function () { openAuth(); });
     }
+  }
+
+  /* --------------------------------------------- e-mail confirmation banner */
+  function renderBanner(msg) {
+    var slot = $("banner-slot");
+    if (!slot) return;
+    if (!S.user || S.user.email_verified) { slot.innerHTML = msg ? '<div class="banner info">' + esc(msg) + "</div>" : ""; return; }
+    slot.innerHTML =
+      '<div class="banner"><span class="banner-ic">✉</span>' +
+      "<span><b>Confirm your e-mail.</b> We sent a link to " + esc(S.user.email) +
+      ". Open it and your progress follows you to any device.</span>" +
+      '<button class="btn btn-ghost btn-sm" id="resend">Resend</button></div>';
+    $("resend").addEventListener("click", function () {
+      var b = this; b.disabled = true; b.textContent = "Sending…";
+      api("/api/auth/resend", { method: "POST" }).then(function (r) {
+        b.textContent = "Sent";
+        if (r.error) { slot.firstChild.querySelector("span:nth-child(2)").innerHTML =
+          "<b>" + esc(r.error) + "</b>"; }
+      });
+    });
   }
 
   function openAuth(mode) {
@@ -96,27 +137,26 @@
     d.innerHTML =
       '<div class="dlg">' +
       '<h2 id="t"></h2><p class="sub" id="s"></p>' +
-      '<div class="tabs"><button id="tab-r">Nowe konto</button><button id="tab-l">Mam konto</button></div>' +
+      '<div class="tabs"><button id="tab-r">New account</button><button id="tab-l">I have an account</button></div>' +
       '<form id="f" autocomplete="on">' +
-      '<div class="field" id="f-handle"><label for="i-handle">Nick</label><input id="i-handle" autocomplete="username" placeholder="np. bartosz"></div>' +
-      '<div class="field" id="f-email"><label for="i-email">E-mail</label><input id="i-email" type="email" autocomplete="email" placeholder="ty@example.com"></div>' +
-      '<div class="field"><label for="i-pass">Hasło</label><input id="i-pass" type="password" autocomplete="current-password" placeholder="min. 10 znaków"></div>' +
+      '<div class="field" id="f-handle"><label for="i-handle">Nickname</label><input id="i-handle" autocomplete="username" placeholder="e.g. kija"></div>' +
+      '<div class="field" id="f-email"><label for="i-email">E-mail</label><input id="i-email" type="email" autocomplete="email" placeholder="you@example.com"></div>' +
+      '<div class="field"><label for="i-pass">Password</label><input id="i-pass" type="password" autocomplete="current-password" placeholder="at least 10 characters"></div>' +
       '<div class="err" id="e"></div>' +
       '<div class="foot"><button class="btn btn-primary" id="go" type="submit"></button>' +
-      '<button class="btn btn-ghost" type="button" id="cancel">Anuluj</button></div>' +
-      '<p class="note">Konto trzyma tylko Twój nick, postęp i kod zadań. Bez newslettera, bez telemetrii, bez reklam. Hasło nigdy nie opuszcza przeglądarki — serwer dostaje tylko jego pochodną.</p>' +
+      '<button class="btn btn-ghost" type="button" id="cancel">Cancel</button></div>' +
+      "<p class=\"note\">An account stores only your nickname, your progress and your code. No newsletter, no telemetry, no ads. Your password never leaves the browser — the server receives only a derivative of it. We e-mail you once, to confirm the address.</p>" +
       "</form></div>";
     document.body.appendChild(d);
     var mode_ = mode;
     var paint = function () {
       var reg = mode_ === "register";
-      $("t", d).textContent = reg ? "Załóż konto" : "Wróć do nauki";
-      $("s", d).textContent = reg ? "Trzy minuty, a postęp nie przepadnie po zamknięciu przeglądarki." : "Podaj nick albo e-mail i hasło.";
-      $("f-handle", d).style.display = reg ? "" : "none";
-      $("f-email", d).style.display = reg ? "" : "none";
-      $("f-handle", d).querySelector("label").textContent = reg ? "Nick (3–24 znaki)" : "";
+      $("t", d).textContent = reg ? "Create your account" : "Welcome back";
+      $("s", d).textContent = reg ? "Three minutes, and your progress survives closing the browser." : "Enter your nickname or e-mail and your password.";
+      $("f-handle", d).querySelector("label").textContent = reg ? "Nickname (3–24 characters)" : "Nickname or e-mail";
+      $("f-email", d).querySelector("label").textContent = "E-mail";
       $("i-pass", d).setAttribute("autocomplete", reg ? "new-password" : "current-password");
-      $("go", d).textContent = reg ? "Utwórz konto" : "Zaloguj";
+      $("go", d).textContent = reg ? "Create account" : "Sign in";
       $("tab-r", d).className = reg ? "on" : "";
       $("tab-l", d).className = reg ? "" : "on";
       $("e", d).textContent = "";
@@ -130,9 +170,10 @@
       e.preventDefault();
       var pass = $("i-pass", d).value;
       var err = $("e", d);
-      if (pass.length < 10) { err.textContent = "Hasło musi mieć co najmniej 10 znaków."; return; }
-      var btn = $("go", d); btn.disabled = true; btn.textContent = "Chwilka…";
+      if (pass.length < 10) { err.textContent = "The password needs at least 10 characters."; return; }
+      var btn = $("go", d); btn.disabled = true; btn.textContent = "One moment…";
       err.textContent = "";
+      var guest = readLocalGuest();
       var go = mode_ === "register"
         ? (function () {
             var handle = $("i-handle", d).value.trim().toLowerCase();
@@ -148,27 +189,26 @@
             });
           })();
       go.then(function (res) {
-        if (res.error || !res.ok) { err.textContent = res.error || "Nie udało się."; btn.disabled = false; paint0(); return; }
-        return api("/api/me").then(function (me) {
-          S.user = me.user; S.progress = me.progress || {}; S.streak = (me.streak && me.streak.days) || 0;
-          localStorage.removeItem(KEY + "progress:" + (me.user ? me.user.handle : "guest"));
-          if (mode_ === "register") {
-            return api("/api/progress/merge", { method: "POST", body: { tasks: readLocalGuest() } })
-              .then(function (r) { S.progress = r.progress || S.progress; });
-          }
-        }).then(function () { d.close(); d.remove(); renderWho(); bootLab(); });
-      }).catch(function () { err.textContent = "Coś poszło nie tak z siecią."; btn.disabled = false; });
-      var paint0 = function () { btn.disabled = false; btn.textContent = mode_ === "register" ? "Utwórz konto" : "Zaloguj"; };
+        if (res.error || !res.ok) { err.textContent = res.error || "Something went wrong."; btn.disabled = false; paint(); return; }
+        // postęp zapisany w przeglądarce wędruje na konto (także przy samym logowaniu)
+        if (Object.keys(guest).length) {
+          return api("/api/progress/merge", { method: "POST", body: { tasks: guest } });
+        }
+      }).then(function () {
+        d.close(); d.remove();
+        return refreshMe().then(function () { if (S.cur) open(S.cur.id); });
+      }).catch(function () { err.textContent = "Network trouble — try again."; btn.disabled = false; paint(); });
     });
   }
 
-  /* ---------------------------------------------------------- postęp */
+  /* ---------------------------------------------------------- progress */
   function readLocalGuest() {
     try { return JSON.parse(localStorage.getItem(KEY + "progress:guest") || "{}"); } catch (e) { return {}; }
   }
   function saveLocal() {
     localStorage.setItem(KEY + "progress:" + (S.user ? S.user.handle : "guest"), JSON.stringify(S.progress));
   }
+  function trackParam() { return new URLSearchParams(location.search).get("track"); }
 
   function markDone(t, hints, points) {
     var s = S.progress[t.id] || (S.progress[t.id] = {});
@@ -177,11 +217,15 @@
     s.attempts = (s.attempts || 0) + 1;
     saveLocal();
     if (S.user) {
-      api("/api/progress", { method: "POST", body: { task: { id: t.id, passed: true, points: s.points, attempts: s.attempts, hints: hints, code: (S.progress[t.id] || {}).code } } })
+      api("/api/progress", { method: "POST", body: { task: { id: t.id, passed: true, points: s.points, attempts: s.attempts, hints: hints, code: s.code } } })
         .then(function () { return api("/api/me"); })
-        .then(function (me) { if (me.user) { S.streak = (me.streak && me.streak.days) || 0; renderWho(); renderSide(); } });
+        .then(function (me) {
+          if (!me.user) return;
+          S.streak = (me.streak && me.streak.days) || 0;
+          renderWho(); renderBanner(); renderSide(trackParam());
+        });
     }
-    renderSide();
+    renderSide(trackParam());
   }
 
   function saveCode(t, code) {
@@ -190,7 +234,7 @@
     saveLocal();
   }
 
-  /* ------------------------------------------------------------ UI */
+  /* --------------------------------------------------------------- UI */
   function points(t) {
     var st = S.progress[t.id] || {};
     return Math.max(10, (t.points || 100) - (st.hints || 0) * 25);
@@ -201,19 +245,19 @@
     if (!el) return;
     var by = {};
     S.tasks.forEach(function (t) { (by[t.track] = by[t.track] || []).push(t); });
-    var labels = { security: "Bezpieczeństwo", python: "Python", ruby: "Ruby", rust: "Rust" };
     var html = "";
     Object.keys(by).forEach(function (k) {
       if (filter && k !== filter) return;
+      var open = by[k].filter(unlocked);
       var done = by[k].filter(function (t) { return (S.progress[t.id] || {}).passed; }).length;
-      html += "<h3>" + (labels[k] || k) + ' <span style="color:var(--ink-3)">' + done + "/" + by[k].length + "</span></h3>";
+      html += "<h3>" + (TRACK_LABELS[k] || k) + ' <span class="side-count">' + done + "/" + open.length + "</span></h3>";
       by[k].forEach(function (t) {
         var st = S.progress[t.id] || {};
+        var lock = unlocked(t) ? "" : '<span class="lock">🔒</span>';
         var cls = "task" + (S.cur && S.cur.id === t.id ? " active" : "") + (st.passed ? " done" : "") + (st.hints ? " hinted" : "");
         html += '<button class="' + cls + '" data-id="' + t.id + '">' +
           '<span class="mark">' + (st.passed ? "✓" : st.hints ? "!" : "") + "</span>" +
-          "<span>" + esc(t.title) + "</span>" +
-          (t.free === false ? '<span class="lock">🔒</span>' : "") + "</button>";
+          "<span>" + esc(t.title) + "</span>" + lock + "</button>";
       });
     });
     el.innerHTML = html;
@@ -229,46 +273,49 @@
     var url = new URL(location.href);
     url.searchParams.set("task", id);
     history.replaceState(null, "", url);
-    renderSide(url.searchParams.get("track"));
+    renderSide(trackParam());
     var st = S.progress[id] || {};
-    var labels = { security: "Bezpieczeństwo", python: "Python", ruby: "Ruby", rust: "Rust" };
     var m = $("main");
     if (!m) return;
 
+    var kind = t.executor === "pyodide" ? "Python · WebAssembly" : t.executor === "vm" ? "lab machine" : "read and answer";
+    var tier = unlocked(t)
+      ? '<span>' + (t.free === false ? "full track" : "in the free tier") + "</span>"
+      : '<span class="tier-locked">past the free ten</span>';
+
     var head =
-      '<div class="crumb">' + (labels[t.track] || t.track) + "</div>" +
-      '<h1>' + esc(t.title) + "</h1>" +
-      '<div class="meta"><span>' + (t.executor === "pyodide" ? "Python · WebAssembly" : t.executor === "vm" ? "maszyna labowa" : "wyjaśnienie") + "</span>" +
-      "<span>trudność " + new Array(t.difficulty + 1).join("●") + "</span>" +
-      "<span>" + (t.free === false ? "poza darmowym tierem" : "w darmowym tierze") + "</span>" +
-      (st.passed ? '<span style="color:var(--mint);font-weight:600">✓ rozwiązane · ' + (st.points || points(t)) + " pkt</span>" : "") +
+      '<div class="crumb">' + (TRACK_LABELS[t.track] || t.track) + "</div>" +
+      "<h1>" + esc(t.title) + "</h1>" +
+      '<div class="meta"><span>' + kind + "</span>" +
+      "<span>difficulty " + new Array(t.difficulty + 1).join("●") + "</span>" + tier +
+      (st.passed ? '<span class="done-note">✓ solved · ' + (st.points || points(t)) + " pts</span>" : "") +
       "</div>" +
       '<div class="brief">' + md(t.brief) + "</div>";
 
     var body;
-    if (t.free === false) {
-      body = '<div class="locked"><h3>Ta ścieżka jest już poza pierwszymi dziesięcioma</h3>' +
-        "<p>Nie mamy cennika — zależnie od zakresu (laby pod Twój stack, grupa prywatna, maszyna zbudowana wokół Twojej infrastruktury) ustalamy to w rozmowie. Pierwsze dziesięć labów zostaje darmowe.</p>" +
-        '<a class="btn btn-primary" href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Zapytaj o dostęp</a></div>';
+    if (!unlocked(t)) {
+      body = '<div class="locked"><h3>This one is past the first ten</h3>' +
+        "<p>We publish no price list — depending on scope (labs for your stack, a private group, a machine built around your infrastructure) we agree it in a conversation. The first ten labs stay free.</p>" +
+        '<a class="btn btn-primary" href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Ask about access</a></div>';
     } else if (t.executor === "quiz") {
       body = '<div class="choices" id="choices"></div><div class="out" id="out" hidden><div class="out-head" id="outhead"></div><pre id="outbody"></pre></div>';
     } else if (t.executor === "vm") {
-      body = '<div class="runbar"><code class="mono" style="background:var(--bg-soft);border:1px solid var(--line);border-radius:10px;padding:10px 13px">' + esc(t.vm_check || "") + "</code>" +
-        '<button class="btn btn-ghost" id="vmcheck">Sprawdź wynik</button></div>' +
+      body = '<div class="runbar"><code class="vmcmd">' + esc(t.vm_check || "") + "</code>" +
+        '<button class="btn btn-ghost" id="vmcheck">Check the result</button></div>' +
         '<div class="out" id="out" hidden><div class="out-head" id="outhead"></div><pre id="outbody"></pre></div>';
     } else {
-      body = '<div class="editor"><textarea class="code" id="code" spellcheck="false" aria-label="Edytor kodu">' +
+      body = '<div class="editor"><textarea class="code" id="code" spellcheck="false" aria-label="Code editor">' +
         esc(st.code || t.starter || "") + "</textarea></div>" +
         '<div class="runbar">' +
-        '<button class="btn btn-primary" id="run">Uruchom testy</button>' +
-        '<button class="btn btn-ghost" id="reset">Wyczyść</button>' +
-        '<button class="btn btn-ghost" id="hint">Podpowiedź</button>' +
-        '<span class="score">Twój wynik <b id="pts">' + points(t) + "</b></span></div>" +
-        '<div class="out" id="out" hidden><div class="out-head" id="outhead">gotowe</div><pre id="outbody"></pre></div>';
+        '<button class="btn btn-primary" id="run">Run the tests</button>' +
+        '<button class="btn btn-ghost" id="reset">Clear</button>' +
+        '<button class="btn btn-ghost" id="hint">Hint</button>' +
+        '<span class="score">Available <b id="pts">' + points(t) + "</b></span></div>" +
+        '<div class="out" id="out" hidden><div class="out-head" id="outhead">ready</div><pre id="outbody"></pre></div>';
     }
 
     m.innerHTML = head + body + (st.passed && t.executor !== "quiz"
-      ? '<div class="out pass" style="margin-top:18px"><div class="out-head">✓ rozwiązane</div><pre>Dobrze. Kod i wynik zapisane — możesz wrócić do tego labu, kiedy chcesz.</pre></div>'
+      ? '<div class="out pass" style="margin-top:18px"><div class="out-head">✓ solved</div><pre>Saved. Come back to this lab whenever you want.</pre></div>'
       : "");
     wire(t);
   }
@@ -285,7 +332,7 @@
     var vm = $("vmcheck"); if (vm) vm.addEventListener("click", function () { vmCheck(t); });
     var ch = $("choices");
     if (ch) {
-      ch.innerHTML = t.choices.map(function (c, i) { return "<button data-i=\"" + i + "\">" + esc(c) + "</button>"; }).join("");
+      ch.innerHTML = t.choices.map(function (c, i) { return "<button data-i=\"" + i + "\">" + md(c) + "</button>"; }).join("");
       ch.querySelectorAll("button").forEach(function (b) {
         b.addEventListener("click", function () { answer(t, +b.dataset.i, b); });
       });
@@ -299,17 +346,17 @@
     st.hints = used + 1; saveLocal();
     var box = document.createElement("div");
     box.className = "hint";
-    box.innerHTML = "<b>Podpowiedź " + (used + 1) + " z " + t.hints.length + " (−" + 25 * st.hints + " pkt)</b>" + md(t.hints[used]);
+    box.innerHTML = "<b>Hint " + (used + 1) + " of " + t.hints.length + " (−" + 25 * st.hints + " pts)</b>" + md(t.hints[used]);
     $("main").appendChild(box);
     var p = $("pts"); if (p) p.textContent = points(t);
-    renderSide(new URLSearchParams(location.search).get("track"));
+    renderSide(trackParam());
   }
 
   function out(kind, text) {
     var o = $("out"); if (!o) return;
     o.hidden = false;
     o.className = "out " + (kind === "pass" ? "pass" : kind === "busy" ? "busy" : "fail");
-    $("outhead").textContent = kind === "pass" ? "✓ wszystko przeszło" : kind === "busy" ? "uruchamiam" : "jeszcze nie";
+    $("outhead").textContent = kind === "pass" ? "✓ everything passed" : kind === "busy" ? "running" : "not yet";
     $("outbody").textContent = text;
   }
 
@@ -319,24 +366,24 @@
     if (!ok) $("choices").querySelectorAll("button").forEach(function (b) {
       if ((t.answer || []).indexOf(+b.dataset.i) !== -1) b.classList.add("right");
     });
-    out(ok ? "pass" : "fail", (ok ? "Dokładnie.\n\n" : "Zobacz zaznaczoną odpowiedź.\n\n") + (t.explain || ""));
+    out(ok ? "pass" : "fail", (ok ? "Exactly.\n\n" : "Look at the highlighted answer.\n\n") + (t.explain || ""));
     if (ok) markDone(t, (S.progress[t.id] || {}).hints || 0);
   }
 
   function vmCheck(t) {
-    var v = prompt("Wklej wynik polecenia z maszyny labowej:");
+    var v = prompt("Paste the output of the command from the lab machine:");
     if (v == null) return;
     var ok = (t.vm_accept || []).some(function (s) { return String(v).indexOf(s) !== -1; });
     out(ok ? "pass" : "fail", ok
-      ? "Maszyna potwierdziła rozwiązanie. Zaliczone."
-      : "To nie jest oczekiwany wynik. Zajrzyj do README maszyny labowej i spróbuj raz jeszcze.");
+      ? "The lab machine confirmed your solution. Marked as solved."
+      : "That is not the expected output. Read the lab machine README and try again.");
     if (ok) markDone(t, 0);
   }
 
-  /* ------------------------------------------------------- wykonawcy */
+  /* ---------------------------------------------------------- executors */
   function loadPyodide() {
     if (S.pyodide) return Promise.resolve(S.pyodide);
-    out("busy", "Pierwsze uruchomienie pobiera Pythona w WebAssembly (~12 MB, jednorazowo)…");
+    out("busy", "The first run downloads Python compiled to WebAssembly (~12 MB, once)…");
     return import(PYODIDE_BASE + "pyodide.mjs")
       .then(function (m) { return m.loadPyodide({ indexURL: PYODIDE_BASE }); })
       .then(function (py) { S.pyodide = py; return py; });
@@ -347,7 +394,7 @@
     saveCode(t, src);
     var st = S.progress[t.id] || (S.progress[t.id] = {});
     st.attempts = (st.attempts || 0) + 1; saveLocal();
-    out("busy", "Uruchamiam testy…");
+    out("busy", "Running the tests…");
     loadPyodide().then(function () {
       return S.pyodide.runPythonAsync([
         "import json",
@@ -363,25 +410,20 @@
       ].join("\n"));
     }).then(function (o) {
       var text = String(o), i = text.lastIndexOf(MARK);
-      if (i === -1) { out("fail", "Testy nie zgłosiły wyniku. Użyj check(...), żeby sprawdzić swoją logikę."); return; }
+      if (i === -1) { out("fail", "The tests reported nothing. Use check(...) to verify your own logic."); return; }
       var checks = JSON.parse(text.slice(i + MARK.length));
       var std = text.slice(0, i).trim();
       var failed = checks.filter(function (c) { return !c.ok; });
       var lines = checks.map(function (c) {
         return (c.ok ? "  ✓  " : "  ✗  ") + c.name + (c.detail ? "\n        " + c.detail : "");
       });
-      if (std) lines.unshift("--- twoje wydruki ---\n" + std + "\n");
+      if (std) lines.unshift("--- your prints ---\n" + std + "\n");
       if (!failed.length) { out("pass", lines.join("\n")); markDone(t, st.hints || 0); }
-      else out("fail", lines.join("\n") + "\n\nPopraw i uruchom ponownie — każda iteracja to nauka, nie porażka.");
-    }).catch(function (e) { out("fail", "Błąd wykonania:\n" + (e && e.message ? e.message : String(e))); });
+      else out("fail", lines.join("\n") + "\n\nFix it and run again — every iteration is learning, not failure.");
+    }).catch(function (e) { out("fail", "Execution error:\n" + (e && e.message ? e.message : String(e))); });
   }
 
-  /* ------------------------------------------------------------ start */
-  function bootLab() {
-    if ($("side") && S.cur) open(S.cur.id);
-    else renderSide(new URLSearchParams(location.search).get("track"));
-  }
-
+  /* --------------------------------------------------------------- start */
   document.addEventListener("click", function (e) {
     var b = e.target.closest(".copy");
     if (!b) return;
@@ -403,15 +445,15 @@
     S.streak = (me.streak && me.streak.days) || 0;
     S.progress = S.user ? (me.progress || {}) : readLocalGuest();
 
-    var q = new URLSearchParams(location.search);
-    var want = q.get("task");
+    var want = new URLSearchParams(location.search).get("task");
     S.cur = (want && S.byId[want]) || null;
     renderWho();
+    renderBanner();
     if ($("side")) {
-      renderSide(q.get("track"));
+      renderSide(trackParam());
       if (S.cur) open(S.cur.id);
     }
   }).catch(function () {
-    var m = $("main"); if (m) m.innerHTML = "<p>Nie udało się pobrać zadań. Sprawdź połączenie i odśwież.</p>";
+    var m = $("main"); if (m) m.innerHTML = "<p>Could not load the tasks. Check your connection and refresh.</p>";
   });
 })();

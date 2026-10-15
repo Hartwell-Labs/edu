@@ -60,12 +60,29 @@ nav.main a:hover { color: var(--accent); }
   display: inline-flex; align-items: center; gap: 8px;
   border: 1px solid var(--line); background: var(--card);
   border-radius: 999px; padding: 6px 12px; font-size: 13.5px; cursor: pointer;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow); text-decoration: none;
 }
 .chip:hover { border-color: var(--line-strong); }
 .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .chip b { font-weight: 600; }
-.chip .streak { color: var(--accent-ink); font-weight: 600; font-size: 12.5px; }
+.chip .streak { color: var(--accent-ink); font-weight: 600; font-size: 12.5px; text-transform: capitalize; }
+.chip .warndot {
+  width: 17px; height: 17px; border-radius: 50%; background: #f59e0b; color: #fff;
+  display: grid; place-items: center; font: 700 11px/1 "Inter", sans-serif;
+}
+
+/* banner potwierdzenia e-mail */
+.banner {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  max-width: 1080px; margin: 16px auto 0; padding: 12px 18px;
+  border: 1px solid #fcd34d; background: #fffbeb; color: #92400e;
+  border-radius: 12px; font-size: 14.5px;
+}
+.banner.info { border-color: var(--line); background: var(--bg-soft); color: var(--ink-2); }
+.banner span { flex: 1 1 320px; }
+.banner b { font-weight: 700; }
+.banner-ic { flex: none !important; font-size: 18px; }
+@media (max-width: 760px) { .banner { margin-inline: 22px; } }
 
 /* ---------------------------------------------------------------- przyciski */
 .btn {
@@ -135,6 +152,13 @@ footer { border-top: 1px solid var(--line); margin-top: 64px; padding: 36px 0 44
 .lab { display: grid; grid-template-columns: 292px 1fr; min-height: calc(100vh - 66px); }
 .side { border-right: 1px solid var(--line); padding: 20px 14px 40px 20px; position: sticky; top: 66px; max-height: calc(100vh - 66px); overflow: auto; background: var(--bg-soft); }
 .side h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); margin: 20px 0 8px; }
+.side-count { color: var(--ink-3); font-weight: 500; letter-spacing: 0; text-transform: none; }
+.tier-locked { color: var(--ink-3); font-style: italic; }
+.done-note { color: var(--mint); font-weight: 600; }
+code.vmcmd {
+  background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 13px; font-size: 13.5px;
+}
 .task {
   display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
   border: 1px solid transparent; background: none; cursor: pointer;

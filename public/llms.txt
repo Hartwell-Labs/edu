@@ -1,8 +1,9 @@
 # Anvil — interactive labs (https://edu.hartwell-labs.pl)
 
-> Hartwell Labs' interactive platform: cybersecurity, Python, Ruby and Rust. Write code, it runs in your
-> browser (Python through WebAssembly), and the checker tells you which test failed. Labs that need a real
-> machine run in the downloadable lab VM. No accounts, no tracking, first ten labs free.
+> Hartwell Labs' interactive platform: cybersecurity, Python, Ruby and Rust. Write code,
+> > it runs in your browser (Python through WebAssembly), and the checker tells you which
+> > test failed. Labs that need a real machine run in the downloadable lab VM. Accounts
+> > are optional, there is no tracking, and the first ten labs are free.
 Generated 2026-10-15. Machine-readable task manifest: https://edu.hartwell-labs.pl/api/manifest
 
 ## Pages
@@ -12,6 +13,16 @@ Generated 2026-10-15. Machine-readable task manifest: https://edu.hartwell-labs.
 - [Lab VM](https://edu.hartwell-labs.pl/lab-vm/README.md): the downloadable virtual machine for systems labs
 - [Build script](https://edu.hartwell-labs.pl/lab-vm/build.sh): builds the image or runs it in host mode
 - [Task manifest](https://edu.hartwell-labs.pl/api/manifest): every task as JSON
+
+## Accounts
+
+- Optional. `POST /api/auth/register` creates an account and sends one confirmation
+  e-mail; `GET /api/auth/verify?token=…` confirms the address. Unverified accounts see a
+  banner and can request one resend per minute.
+- Passwords are stretched in the browser (PBKDF2-SHA256, 210 000 iterations) and only
+  the verifier reaches the server, which compares it in constant time.
+- Sessions: 32 random bytes in an HttpOnly, SameSite=Lax cookie, 60-day expiry.
+- Plans: `free` covers the first ten labs, `lifetime` opens every task.
 
 ## Execution model
 
@@ -25,31 +36,32 @@ Generated 2026-10-15. Machine-readable task manifest: https://edu.hartwell-labs.
 
 ### Cybersecurity
 
-- **Wykryj próbę wstrzyknięcia** (`py-04-sqli`, difficulty 3, 180 pts, free) — Dostajesz część zapytania HTTP. Uzupełnij `is_injection`, żeby zwracała `True`, gdy wartość wygląda na próbę SQL injection: `' OR`, `" OR`, `UNION SEL
-- **Zamaskuj numer karty w logu** (`rb-02-redact`, difficulty 2, 140 pts, free) — Maska numerów kart to realna robota w logach i zgłoszeniach, więc ten lab startuje w pobranej maszynie wirtualnej.
-- **Nazwij technikę z logu** (`sec-01-technique`, difficulty 2, 120 pts, free) — Fragment logu WAF z Twojego środowiska:
-- **Uruchom usługę z złą flagą (lab VM)** (`vm-01-insecure-flag`, difficulty 3, 200 pts, free) — Ta seria labów potrzebuje prawdziwego Linuksa, sieci i procesu, którego nie da się zasymulować w karcie przeglądarki. Ściągnij obraz lab VM (link na s
-- **Napisz własny skaner z ShadowScan** (`sec-l1-webscan`, difficulty 5, 600 pts, **beyond the free tier**) — Zadanie z pełnej ścieżki: budujesz skaner, który potrafi zrobić coś więcej niż CyberForge w wersji publicznej — respektuje limit requestów, nie zgaduj
+- **Spot an injection attempt** (`py-04-sqli`, difficulty 3, 180 pts, free) — Complete `is_injection` so it returns `True` for `' OR`, `" OR`, `UNION SELECT`, `; DROP`, a `--` comment or `SLEEP(`. A literal `%27` is not an attack.
+- **Redact a card number in a log** (`rb-02-redact`, difficulty 2, 140 pts, free) — Masking card numbers is real work in logs, so this lab starts in the downloadable lab machine.
+- **Name the technique in the log** (`sec-01-technique`, difficulty 2, 120 pts, free) — A WAF log fragment: quote, `UNION SELECT`, `--` comment. Which attack is it?
+- **Run a service with an unsafe flag (lab VM)** (`vm-01-insecure-flag`, difficulty 3, 200 pts, free) — Set a flag that leaks data into the log and confirm the leak with one command.
+- **Write your own scanner with ShadowScan** (`sec-l1-webscan`, difficulty 5, 600 pts, **beyond the free tier**) — A scanner with a request budget, no guessing outside scope, and diffable output.
 
 ### Python
 
-- **Zrób z logu struktury** (`py-01-authlog`, difficulty 1, 100 pts, free) — Linia logu ma format `IP - - [ts] "METHOD path" status`. Uzupełnij `parse_line`, żeby zwracała krotkę `(ip, method, status)` z `int` dla statusu. Pust
-- **Zweryfikuj sumę kontrolną** (`py-02-digest`, difficulty 2, 120 pts, free) — Masz bajty pliku i oczekiwany digest. Uzupełnij `sha256_hex`, żeby zwracała hexdigest. **Uwaga na pułapkę**: `int(digest, 16)` bez ograniczeń przestaś
-- **Trzy warstwy szyfrowania** (`py-03-decoder`, difficulty 2, 150 pts, free) — Zonkayload to base64, pod nim ROT13, pod tym znak po znaku. Uzupełnij `decode_blob`, żeby zwracała odszyfrowany tekst. Uwaga: `base64.b64decode` potrz
-- **Async skaner portów bez zgadywania** (`py-l1-async`, difficulty 5, 700 pts, **beyond the free tier**) — Pełna ścieżka: `asyncio` + ograniczenie współbieżności, poprawny timeout i raport w JSON. W wersji darmowej zbliżasz się do tego zadaniem `py-04-sqli`
+- **Turn a log line into structure** (`py-01-authlog`, difficulty 1, 100 pts, free) — Parse `IP - - [ts] "METHOD path" status` into `(ip, method, status)`, with `status` as an `int`.
+- **Verify a checksum** (`py-02-digest`, difficulty 2, 120 pts, free) — Return the SHA-256 hex digest and compare strings, never unbounded `int(…, 16)`.
+- **Three layers of encryption** (`py-03-decoder`, difficulty 2, 150 pts, free) — base64, then ROT13, then reverse. `b64decode` needs bytes and `validate=True`.
+- **An async port scanner that never guesses** (`py-l1-async`, difficulty 5, 700 pts, **beyond the free tier**) — `asyncio` with a concurrency limit, a real timeout, a JSON report.
 
 ### Ruby
 
-- **Enumerable tam, gdzie pętla** (`rb-01-enumerable`, difficulty 2, 130 pts, free) — Ta ścieżka wymaga prawdziwego interpretera, więc w v1 laby Rubiego prowadzą w pobranej maszynie wirtualnej.
+- **Enumerable where a loop would go** (`rb-01-enumerable`, difficulty 2, 130 pts, free) — `select { }.map { }.sort` over a list of security events, on a real interpreter in the lab VM.
 
 ### Rust
 
-- **Przewiduj wyjście: ownership** (`rs-01-predict`, difficulty 3, 160 pts, free) — Rust nie kompiluje się w przeglądarce, ale kompilator nadal jest najlepszym nauczycielem ownership. Który z tych programów **wkompiluje się**?
-- **Przeczytaj komunikat borrow checkera** (`rs-02-panic`, difficulty 4, 180 pts, free) — W lab VM dostajesz taki błąd:
-- **Bezpieczne FFI do eBPF** (`rs-l1-ffi`, difficulty 5, 900 pts, **beyond the free tier**) — Pisanie bezpiecznego wrappera na `bpf_probe_read_user` i walidacja buforów — materiał na poziomie talus-process-monitor, z realnymi testami i porównan
+- **Predict the output: ownership** (`rs-01-predict`, difficulty 3, 160 pts, free) — Which program compiles? `move` invalidates the original binding.
+- **Read a borrow checker error** (`rs-02-panic`, difficulty 4, 180 pts, free) — `v.push(v.len())` — pick the cleanest fix.
+- **Safe FFI to eBPF** (`rs-l1-ffi`, difficulty 5, 900 pts, **beyond the free tier**) — A safe wrapper around `bpf_probe_read_user` with buffer validation.
 
 ## Licensing
 
 - Labs are MIT licensed unless a task says otherwise.
-- Pricing: no public price list. Free tier covers the first ten labs; beyond that we agree case by case.
+- Pricing: no public price list. The free tier covers the first ten labs; beyond that we
+  agree case by case.
 - Contact: contact@hartwell-labs.pl

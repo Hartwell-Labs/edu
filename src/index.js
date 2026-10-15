@@ -1,19 +1,22 @@
 /**
- * Anvil — worker dla edu.hartwell-labs.pl
+ * Anvil — worker for edu.hartwell-labs.pl
  *
- * Serwuje aplikację (interaktywne laby) i backend:
- *   /api/auth/register   zakładanie konta  (handle + e-mail + hasło)
- *   /api/auth/login      logowanie, cookie sesji HttpOnly
+ * Serves the app (interactive labs) and the backend:
+ *   /api/auth/register   create an account (nick + e-mail + client-side verifier)
+ *   /api/auth/login      sign in, HttpOnly session cookie
  *   /api/auth/logout
- *   /api/me              profil + postęp + streak
- *   /api/progress        zapis postępu zadania (wymaga konta albo trybu gościa)
- *   /api/manifest        rejestr zadań
+ *   /api/auth/verify     e-mail confirmation link (token from Resend mail)
+ *   /api/auth/resend     one confirmation mail per minute
+ *   /api/me              profile + progress + streak + plan
+ *   /api/progress        save one task's progress (account or guest mode)
+ *   /api/progress/merge  migrate guest progress onto the account
+ *   /api/manifest        task registry
  *   /healthz
  *
- * Hasła: PBKDF2-SHA256, 210 000 iteracji, 16-bajtowa sól (OWASP 2023).
- * Sesje: 32 losowe bajty w HttpOnly+SameSite=Lax cookie, ważność 60 dni,
- * odtwarzane w bazie (można unieważnić pojedynczą sesję).
- * Postęp gościa zostaje w localStorage; po zalogowaniu jest migrowany na konto.
+ * Passwords: PBKDF2-SHA256 with 210 000 iterations runs in the browser; the server
+ * only stores the verifier. Sessions: 32 random bytes in an HttpOnly+SameSite=Lax
+ * cookie, valid for 60 days, revocable server-side. Guest progress stays in
+ * localStorage and is merged into the account on sign-in.
  */
 
 const CSP_STRICT = [
@@ -42,6 +45,8 @@ const CSP_LAB = [
 ].join("; ");
 
 const SESSION_DAYS = 60;
+/* Plan "lifetime" opens the tasks past the free tier. Default is free. */
+const PLANS = new Set(["free", "lifetime"]);
 const PBKDF2_ALGO = "pbkdf2-sha256";
 const COOKIE = "anvil_session";
 
@@ -62,7 +67,7 @@ const randHex = (n) => hex(crypto.getRandomValues(new Uint8Array(n)));
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{2,23}$/;
 const EMAIL_RE = /^[^@\s]+@[^@\s.]+\.[^@\s]+$/;
 
-/** Porównanie w stałym czasie — brak wycieku przez czas odpowiedzi. */
+/** Constant-time comparison — no timing leak. */
 function timingSafeEqual(a, b) {
   if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
   let diff = 0;
@@ -146,6 +151,42 @@ async function touchStreak(env, userId) {
   return { days: days.length, best };
 }
 
+/* ------------------------------------------------------------------ mail */
+const MAIL_FROM = "Anvil <labs@hartwell-labs.pl>";
+
+/** Wysyła maila przez Resend. Brak klucza = brak wysyłki, ale konto działa. */
+async function sendMail(env, to, subject, text, kind) {
+  if (!env.RESEND_API_KEY) return false;
+  try {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: env.MAIL_FROM || MAIL_FROM, to: [to], subject, text }),
+    });
+    const ok = r.ok;
+    await env.DB.prepare("INSERT INTO mail_outbox (to_addr, subject, kind, created_at) VALUES (?,?,?,?)")
+      .bind(to, subject, kind, now()).run().catch(() => {});
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+const verifyLink = (token) => `https://edu.hartwell-labs.pl/api/auth/verify?token=${token}`;
+
+async function sendVerification(env, user) {
+  const token = randHex(24);
+  await env.DB.prepare("UPDATE users SET verify_token = ?, verify_sent_at = ? WHERE id = ?")
+    .bind(token, now(), user.id).run();
+  await sendMail(
+    env, user.email, "Confirm your e-mail in Anvil",
+    `Hi ${user.handle},\n\nConfirm your e-mail in Anvil — open the link:\n\n${verifyLink(token)}\n\n` +
+    `The link is valid for 24 hours. If you did not sign up, just ignore this message.\n\n— the Anvil team`,
+    "verify",
+  );
+  return token;
+}
+
 /* ------------------------------------------------------------------ auth */
 async function register(request, env) {
   const body = await request.json().catch(() => ({}));
@@ -154,17 +195,17 @@ async function register(request, env) {
   const verifier = String(body.verifier || "").trim();
 
   if (!HANDLE_RE.test(handle))
-    return json({ error: "Nick: 3–24 znaki, małe litery, cyfry, myślnik lub podkreślenie." }, { status: 400 });
+    return json({ error: "Nickname: 3–24 characters, lowercase letters, digits, hyphen or underscore." }, { status: 400 });
   if (!EMAIL_RE.test(email))
-    return json({ error: "E-mail wygląda na niepoprawny." }, { status: 400 });
+    return json({ error: "That e-mail address does not look valid." }, { status: 400 });
   if (!/^[0-9a-f]{64}$/.test(verifier))
-    return json({ error: "Brak poprawnej pochodnej hasła (wygeneruj ją w przeglądarce)." }, { status: 400 });
+    return json({ error: "Missing a valid password verifier (generate it in the browser)." }, { status: 400 });
   if (String(body.password_length || 0) < 10)
-    return json({ error: "Hasło musi mieć co najmniej 10 znaków." }, { status: 400 });
+    return json({ error: "The password needs at least 10 characters." }, { status: 400 });
 
   const exists = await env.DB.prepare("SELECT 1 FROM users WHERE handle = ? OR email = ?")
     .bind(handle, email).first();
-  if (exists) return json({ error: "Ta nazwa albo e-mail jest już zajęty." }, { status: 409 });
+  if (exists) return json({ error: "That nickname or e-mail is already taken." }, { status: 409 });
 
   const salt = randHex(16);
   const id = crypto.randomUUID();
@@ -175,25 +216,27 @@ async function register(request, env) {
       "INSERT INTO users (id, handle, email, pw_salt, pw_hash, created_at, last_seen) VALUES (?,?,?,?,?,?,?)",
     ).bind(id, handle, email, salt, pwHash, t, t).run();
   } catch (e) {
-    return json({ error: "Konto istnieje już." }, { status: 409 });
+    return json({ error: "That account already exists." }, { status: 409 });
   }
 
   const token = await createSession(env.DB, id);
-  return json({ ok: true, handle }, { headers: { "set-cookie": sessionCookie(token) } });
+  const user = { id, handle, email };
+  await sendVerification(env, user);
+  return json({ ok: true, handle, email_verified: false }, { headers: { "set-cookie": sessionCookie(token) } });
 }
 
 async function login(request, env) {
   const body = await request.json().catch(() => ({}));
   const id = String(body.id || "").trim().toLowerCase();
   const verifier = String(body.verifier || "");
-  if (!id || !verifier) return json({ error: "Podaj nick (albo e-mail) i hasło." }, { status: 400 });
+  if (!id || !verifier) return json({ error: "Give a nickname (or e-mail) and a password." }, { status: 400 });
 
   const user = await env.DB.prepare(
     "SELECT * FROM users WHERE handle = ? OR email = ?",
   ).bind(id, id).first();
 
   if (!user || !hashMatches(user.pw_hash, verifier))
-    return json({ error: "Nieprawidłowy nick albo hasło." }, { status: 401 });
+    return json({ error: "Wrong nickname or password." }, { status: 401 });
 
   await env.DB.prepare("UPDATE users SET last_seen = ? WHERE id = ?").bind(now(), user.id).run();
   const token = await createSession(env.DB, user.id);
@@ -247,12 +290,39 @@ export default {
       if (p === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (p === "/api/auth/logout" && request.method === "POST") return logout(request, env);
 
+      if (p === "/api/auth/verify") {
+        const token = url.searchParams.get("token") || "";
+        if (!/^[0-9a-f]{48}$/.test(token)) return json({ ok: false, error: "bad link" }, { status: 400 });
+        const row = await env.DB.prepare("SELECT id FROM users WHERE verify_token = ?").bind(token).first();
+        if (!row) return json({ ok: false, error: "the link expired or was already used" }, { status: 400 });
+        await env.DB.prepare("UPDATE users SET email_verified = 1, verify_token = NULL WHERE id = ?")
+          .bind(row.id).run();
+        return json({ ok: true });
+      }
+
+      if (p === "/api/auth/resend" && request.method === "POST") {
+        const user = await currentUser(request, env);
+        if (!user) return json({ error: "no session" }, { status: 401 });
+        const row = await env.DB.prepare("SELECT verify_sent_at, email_verified FROM users WHERE id = ?")
+          .bind(user.id).first();
+        if (row && row.email_verified) return json({ ok: true, already: true });
+        if (row && now() - row.verify_sent_at < 60_000)
+          return json({ error: "Wait a minute before asking for another one." }, { status: 429 });
+        await sendVerification(env, user);
+        return json({ ok: true });
+      }
+
       if (p === "/api/me") {
         const user = await currentUser(request, env);
         if (!user) return json({ user: null });
         const row = await env.DB.prepare("SELECT days, best FROM streak WHERE user_id = ?").bind(user.id).first();
+        const acc = await env.DB.prepare("SELECT plan, email_verified FROM users WHERE id = ?")
+          .bind(user.id).first();
         return json({
-          user: { handle: user.handle, email: user.email, created_at: user.created_at },
+          user: {
+            handle: user.handle, email: user.email, created_at: user.created_at,
+            plan: acc?.plan || "free", email_verified: !!acc?.email_verified,
+          },
           progress: await loadProgress(env, user.id),
           streak: { days: row ? (row.days ? row.days.split(",").length : 0) : 0, best: row?.best || 0 },
         });
@@ -285,7 +355,7 @@ export default {
           return json({ ok: true, saved: true, progress: await loadProgress(env, user.id) });
         }
 
-        // gość: bez konta, zapisujemy tylko w pamięci workera jako best-effort
+        // guest: no account, stored in worker memory as a best-effort
         return json({ ok: true, guest: true });
       }
 
@@ -294,10 +364,10 @@ export default {
         return json({ user: user ? user.handle : null, progress: user ? await loadProgress(env, user.id) : {} });
       }
 
-      // po zalogowaniu: migracja postępu z localStorage
+      // signed in: migrate progress out of localStorage
       if (p === "/api/progress/merge" && request.method === "POST") {
         const user = await currentUser(request, env);
-        if (!user) return json({ error: "brak sesji" }, { status: 401 });
+        if (!user) return json({ error: "no session" }, { status: 401 });
         const body = await request.json().catch(() => ({}));
         return json({ ok: true, progress: await mergeProgress(env, user.id, body.tasks) });
       }
