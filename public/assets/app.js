@@ -23,8 +23,12 @@
   var $ = function (id, root) { return (root || document).querySelector("#" + id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
 
-  /** An account opens the whole public catalogue; `plan` only marks a supporter. */
-  function unlocked() { return !!S.user; }
+  /**
+   * Dostęp: darmowe konto = pierwsze 10 zadań. Drugi tier (plan lifetime)
+   * odblokowuje pełne ścieżki — skanery, async, FFI do eBPF.
+   */
+  function paid() { return !!S.user && S.user.plan && S.user.plan !== "free"; }
+  function unlocked(t) { return !!S.user && (t.free !== false || paid()); }
 
   function md(s) {
     // inline: **bold**, `code`, fenced blocks, bullet lists
@@ -215,9 +219,21 @@
   /** Pierwsze nierozwiązane zadanie — dokąd podpowiedzieć po zalogowaniu. */
   function nextTask() {
     for (var i = 0; i < S.tasks.length; i++) {
-      if (!(S.progress[S.tasks[i].id] || {}).passed) return S.tasks[i];
+      var t = S.tasks[i];
+      if (unlocked(t) && !(S.progress[t.id] || {}).passed) return t;
     }
     return null;
+  }
+
+  /** Numer zadania w dziesiątce darmowej (1–10), albo 0 poza nim. */
+  function freeIndex(t) {
+    var n = 0;
+    for (var i = 0; i < S.tasks.length; i++) {
+      if (S.tasks[i].free === false) break;
+      if (S.tasks[i].id === t.id) return n + 1;
+      n++;
+    }
+    return 0;
   }
 
   function markDone(t, hints, points) {
@@ -259,25 +275,51 @@
     Object.keys(by).forEach(function (k) {
       if (filter && k !== filter) return;
       var list = by[k];
-      var done = list.filter(function (t) { return (S.progress[t.id] || {}).passed; }).length;
-      html += "<h3>" + (TRACK_LABELS[k] || k) + ' <span class="side-count">' + done + "/" + list.length + "</span></h3>";
+      var open = list.filter(function (t) { return unlocked(t); });
+      var done = open.filter(function (t) { return (S.progress[t.id] || {}).passed; }).length;
+      var tail = open.length < list.length ? ' <span class="side-paid">+' + (list.length - open.length) + " paid</span>" : "";
+      html += "<h3>" + (TRACK_LABELS[k] || k) + ' <span class="side-count">' + done + "/" + open.length + "</span>" + tail + "</h3>";
       list.forEach(function (t) {
         var st = S.progress[t.id] || {};
-        var open = unlocked();
-        var cls = "task" + (S.cur && S.cur.id === t.id ? " active" : "") + (st.passed ? " done" : "") + (st.hints ? " hinted" : "") + (open ? "" : " veiled");
-        html += '<button class="' + cls + '" data-id="' + t.id + '"' + (open ? "" : ' data-veiled="1"') + ">" +
+        var openTask = unlocked(t);
+        var cls = "task" + (S.cur && S.cur.id === t.id ? " active" : "") + (st.passed ? " done" : "") +
+          (st.hints ? " hinted" : "") + (openTask ? "" : " veiled");
+        html += '<button class="' + cls + '" data-id="' + t.id + '"' + (openTask ? "" : ' data-veiled="1"') + ">" +
           '<span class="mark">' + (st.passed ? "✓" : st.hints ? "!" : "") + "</span>" +
-          "<span>" + esc(open ? t.title : "Locked until you sign up") + "</span>" +
-          (open ? "" : '<span class="lock">🔒</span>') + "</button>";
+          "<span>" + esc(t.title) + "</span>" +
+          (openTask ? "" : '<span class="lock">🔒</span>') + "</button>";
       });
     });
     el.innerHTML = html;
     el.querySelectorAll(".task").forEach(function (b) {
-      b.addEventListener("click", function () {
-        if (b.getAttribute("data-veiled")) { openAuth("register"); return; }
-        open(b.getAttribute("data-id"));
-      });
+      b.addEventListener("click", function () { open(b.getAttribute("data-id")); });
     });
+  }
+
+  /** Ekran dla zadania z płatnego tieru: mówi wprost, co jest w środku. */
+  function renderUpgrade(t) {
+    var m = $("main");
+    if (!m) return;
+    var rest = S.tasks.filter(function (x) { return x.free === false; });
+    m.innerHTML =
+      '<div class="locked paywall">' +
+      '<span class="kicker">Second tier · lifetime</span>' +
+      "<h1>" + esc(t.title) + "</h1>" +
+      '<div class="brief">' + md(t.brief.split("```")[0]) + "</div>" +
+      "<p>The first ten labs are free and stay free — this one is in the paid tier: " +
+      rest.length + " labs covering the full paths (async work, a scanner built to a spec, " +
+      "a safe eBPF wrapper, and everything that needs a real machine).</p>" +
+      '<p class="pay-note">No price list: it depends on scope, so we quote it in a conversation. ' +
+      "Lifetime means once, not a subscription.</p>" +
+      '<div class="gate-actions">' +
+      '<a class="btn btn-primary" href="mailto:contact@hartwell-labs.pl?subject=Anvil%20lifetime">Ask for lifetime access</a>' +
+      (S.user ? "" : '<button class="btn btn-ghost" id="gate-task-login">I have an account</button>') +
+      "</div>" +
+      '<p class="gate-foot">Already have it? Then this lab is open — ' +
+      '<a href="mailto:contact@hartwell-labs.pl?subject=Anvil%20account">tell us the nickname</a> and we activate it.</p>' +
+      "</div>";
+    var lg = $("gate-task-login");
+    if (lg) lg.addEventListener("click", function () { openAuth("login"); });
   }
 
   /** Bez konta labow nie ma — pokazujemy bramkę zamiast zadań. */
@@ -291,16 +333,17 @@
     }).join("");
     m.innerHTML =
       '<div class="gate">' +
-      '<span class="kicker">Free account · full catalogue · no card</span>' +
+      '<span class="kicker">Free account · first ten labs · no card</span>' +
       "<h1>Create a free account and start the first lab</h1>" +
       "<p class=\"lede\" style=\"margin:14px 0 22px\">An account takes a minute: a nickname, an e-mail and a password. " +
-      "That is the whole price — every lab in the catalogue stays free, your progress follows you to any device, " +
-      "and we never send more than the one confirmation e-mail.</p>" +
-      '<div class="gate-actions"><button class="btn btn-primary" id="gate-cta">Create account</button>' +
+      "The first ten labs are free and stay free — real Python in your browser, a service you break yourself, " +
+      "ownership questions with the compiler's own answers. Deeper paths live in the paid tier.</p>" +
+      '<div class="gate-actions"><button class="btn btn-primary" id="gate-cta">Create free account</button>' +
       '<button class="btn btn-ghost" id="gate-login">I already have one</button></div>' +
       '<ul class="gate-tracks">' + rows + "</ul>" +
-      '<p class="gate-foot">Need labs written for your team, a private group or a lab machine built around your stack? ' +
-      '<a href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Write to us</a> — we quote per conversation, never per list.</p>' +
+      '<p class="gate-foot">Paid tier (lifetime): the full paths — async under load, a scanner built to a spec, ' +
+      'a safe eBPF wrapper. No price list, we quote it in a conversation. ' +
+      '<a href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Write to us</a>.</p>' +
       "</div>";
     $("gate-cta").addEventListener("click", function () { openAuth("register"); });
     $("gate-login").addEventListener("click", function () { openAuth("login"); });
@@ -319,11 +362,13 @@
     if (!m) return;
 
     var kind = t.executor === "pyodide" ? "Python · WebAssembly" : t.executor === "vm" ? "lab machine" : "read and answer";
-    var tier = S.user
-      ? (S.user.plan && S.user.plan !== "free"
-          ? '<span class="tier-full">full track · ' + esc(S.user.plan) + "</span>"
-          : "<span>in the free catalogue</span>")
-      : '<span class="tier-locked">sign up to open</span>';
+    var tier = !S.user
+      ? '<span class="tier-locked">sign up to open</span>'
+      : paid()
+        ? '<span class="tier-full">paid tier · ' + esc(S.user.plan) + "</span>"
+        : (t.free === false
+            ? '<span class="tier-locked">paid tier</span>'
+            : "<span>free · lab " + freeIndex(t) + " of 10</span>");
 
     var head =
       '<div class="crumb">' + (TRACK_LABELS[t.track] || t.track) + "</div>" +
@@ -335,11 +380,16 @@
       '<div class="brief">' + md(t.brief) + "</div>";
 
     var body;
-    if (!unlocked()) {
-      body = '<div class="locked"><h3>Sign up to open this lab</h3>' +
-        "<p>A free account is all it takes — a nickname, an e-mail and a password. Every lab in the catalogue is free afterwards, and your progress follows you between devices.</p>" +
-        '<div class="gate-actions"><button class="btn btn-primary" id="gate-task-cta">Create free account</button>' +
-        '<button class="btn btn-ghost" id="gate-task-login">I already have one</button></div></div>';
+    if (!unlocked(t)) {
+      if (!S.user) {
+        body = '<div class="locked"><h3>Sign up to open this lab</h3>' +
+          "<p>A free account is all it takes — a nickname, an e-mail and a password. The first ten labs are free, and your progress follows you between devices.</p>" +
+          '<div class="gate-actions"><button class="btn btn-primary" id="gate-task-cta">Create free account</button>' +
+          '<button class="btn btn-ghost" id="gate-task-login">I already have one</button></div></div>';
+      } else {
+        renderUpgrade(t);
+        return;
+      }
     } else if (t.executor === "quiz") {
       body = '<div class="choices" id="choices"></div><div class="out" id="out" hidden><div class="out-head" id="outhead"></div><pre id="outbody"></pre></div>';
     } else if (t.executor === "vm") {

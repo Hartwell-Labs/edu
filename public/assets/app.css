@@ -237,7 +237,13 @@ textarea.code:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 .gate-foot a { color: var(--accent); font-weight: 600; }
 .task.veiled { opacity: .55; }
 .task.veiled:hover { border-color: var(--accent); opacity: 1; }
+.task.veiled span:nth-child(2) { text-decoration: line-through; text-decoration-color: var(--ink-3); }
 .tier-full { color: var(--accent-ink); font-weight: 600; text-transform: capitalize; }
+.side-paid { color: var(--accent-ink); font-weight: 600; text-transform: none; letter-spacing: 0; }
+.paywall { border-style: solid; border-color: var(--accent); background: linear-gradient(180deg, var(--accent-soft), var(--card) 60%); }
+.paywall h1 { margin: 6px 0 14px; }
+.paywall p { color: var(--ink-2); margin-bottom: 12px; max-width: 64ch; }
+.pay-note { color: var(--accent-ink) !important; font-weight: 600; }
 
 dialog {
   border: 1px solid var(--line); border-radius: 18px; padding: 0; max-width: 460px; width: 92vw;

@@ -1,7 +1,8 @@
 # Anvil — interactive labs for cybersecurity, Python, Ruby and Rust
 
 Hartwell Labs' learning platform: **the student writes code, the code runs, and the
-checker says which test did not pass.** No telemetry, first ten labs free.
+checker says which test did not pass.** No telemetry. An account is required, the first
+ten labs are free, the second tier (lifetime) opens the full paths.
 
 - **Site:** https://edu.hartwell-labs.pl (a Cloudflare Worker subdomain)
 - **Lab:** https://edu.hartwell-labs.pl/lab
@@ -20,10 +21,16 @@ Nothing leaves the browser for the server: code and tests run on the student's m
 and the result comes back to the engine as JSON. Guest progress lives in `localStorage`;
 with an account it syncs to D1 (`anvil` database).
 
-## Accounts
+## Accounts and access
 
-Optional — the first ten labs need none.
+An account is required to open any lab — that is the whole gate. Nickname, e-mail,
+password; one confirmation mail.
 
+- **Free (the default): the first ten labs.** They stay free.
+- **Paid second tier (`plan = "lifetime"`): the remaining six.** Sliding-window rate
+  limiting, a scanner built to a spec, a safe `bpf_probe_read_user` wrapper, borrow
+  checker depth, and the service you run yourself. Lifetime = one payment, no
+  subscription. No price list — quoted per conversation.
 - Registration sends one confirmation e-mail (Resend, `labs@hartwell-labs.pl`);
   `/api/auth/verify?token=…` marks the address confirmed. Unverified accounts get a
   banner and a "Resend" button, rate limited to one mail per minute.
@@ -32,23 +39,26 @@ Optional — the first ten labs need none.
   have ~10 ms of CPU and hashing a password server-side died with exception 1101.
 - Sessions: 32 random bytes in an HttpOnly, SameSite=Lax cookie, valid for 60 days,
   revocable server-side.
-- Plans: `free` (first ten labs) or `lifetime` (everything). Change them with
-  `python3 admin.py grant <handle> lifetime`.
+- Plans: `free` (ten labs) or `lifetime` (everything). Change them with
+  `python3 admin.py grant <handle> lifetime`. The client checks `plan` on every task
+  view; the manifest carries the `free` flag per task.
 
 Guest progress is merged into the account on sign-in via `/api/progress/merge`.
 
-## Tasks (13, three of them past the free tier)
+## Tasks (16: ten free, six in the paid tier)
 
 **Python (browser):** parsing a log line, verifying a SHA-256 digest, three layers of
 encoding, detecting a SQL injection attempt. 3–5 assertions each, with a message and the
 actual value.
 
-**Cybersecurity:** name the technique in a WAF log (quiz), detect an injection (code),
-and a real lab VM — a service with a deliberate misconfiguration that leaks a secret
-into its log.
+**Cybersecurity:** name the technique in a WAF log (quiz), detect an injection, decode a
+JWT and catch `alg: none`, count repeat offenders in a firewall log, sliding-window rate
+limiting, redact a card number in Ruby, and a real lab VM — a service with a deliberate
+misconfiguration that leaks a secret into its log.
 
 **Rust:** predict what a program does (ownership, `move`), read a borrow-checker error
-and pick the fix. Executable Rust — on the lab VM, where `cargo` exists.
+and pick the fix, and predict E0515. Executable Rust — on the lab VM, where `cargo`
+exists and `labcheck` compiles your crate and runs your tests.
 
 **Ruby:** labs on a real interpreter in the lab VM (`Enumerable`, `gsub` with a block,
 masking data in logs).

@@ -3,20 +3,23 @@
 > Hartwell Labs' interactive platform: cybersecurity, Python, Ruby and Rust. Write code,
 > > it runs in your browser (Python through WebAssembly), and the checker tells you which
 > > test failed. Labs that need a real machine run in a downloadable lab VM.
-Generated 2026-10-15. Machine-readable task manifest: https://edu.hartwell-labs.pl/api/manifest
+Generated 2026-10-16. Machine-readable task manifest: https://edu.hartwell-labs.pl/api/manifest
 
-## Access
+## Access model
 
-- **A free account is required** to open any lab: nickname, e-mail, password
-  (`POST /api/auth/register`). One confirmation e-mail is sent; `GET
-  /api/auth/verify?token=…` confirms the address.
-- **Every task in the catalogue is free** once you have an account. There is no paid tier
-  and no price list — paid work is custom (labs for a team, a private group, a lab machine
-  built around your stack) and quoted per conversation.
+- **An account is required** to open any lab (`POST /api/auth/register`: nickname,
+  e-mail, client-side password verifier). One confirmation e-mail is sent;
+  `GET /api/auth/verify?token=…` confirms the address.
+- **The first ten labs are free** with that account and stay free.
+- **The second tier (`plan = "lifetime"`) opens the remaining six labs** — the full
+  paths: sliding-window rate limiting, a scanner built to a spec, a safe eBPF FFI
+  wrapper, borrow-checker depth, and the service you have to run yourself. No price
+  list: quoted per conversation, lifetime (one payment, not a subscription).
 - Sessions: 32 random bytes in an HttpOnly, SameSite=Lax cookie, 60-day expiry.
 - Passwords are stretched in the browser (PBKDF2-SHA256, 210 000 iterations); only the
   verifier reaches the server, which compares it in constant time.
-- `GET /api/manifest` returns all 16 tasks. `GET /api/me` returns profile, progress, streak.
+- `GET /api/manifest` returns all 16 tasks with a `free` flag. `GET /api/me` returns
+  profile, plan, progress and streak.
 
 ## Pages
 
@@ -34,43 +37,38 @@ Generated 2026-10-15. Machine-readable task manifest: https://edu.hartwell-labs.
 | `quiz` | one correct answer, no code | browser |
 | `vm` | needs a kernel, network or compiler | downloaded lab VM, verified locally by `labcheck` |
 
-## Tasks
+## Free labs (first ten)
 
 ### Python
-- **Turn a log line into structure** (`py-01-authlog`, difficulty 1, 100 pts, pyodide) — A log line looks like `IP - - [ts] "METHOD path" status`. Complete `parse_line` so it returns a tuple `(ip, method, status)` with `status` as an `i...
-- **Verify a checksum** (`py-02-digest`, difficulty 2, 120 pts, pyodide) — You have the file bytes and an expected digest. Complete `sha256_hex` so it returns the hex digest. **Watch the trap**: unbounded `int(digest, 16)`...
-- **Three layers of encryption** (`py-03-decoder`, difficulty 2, 150 pts, pyodide) — The payload is base64, under it ROT13, under that a reversed string. Complete `decode_blob` so it returns the plaintext. Two gotchas: `base64.b64de...
+
+- **Turn a log line into structure** (`py-01-authlog`, difficulty 1, 100 pts, pyodide) — A log line looks like `IP - - [ts] "METHOD path" status`. Complete `parse_line` so it returns a tuple `(ip, method, status)` with `status` as an `int`. Empty line... 7 assertions, 3 hints, one Stretch goal.
+- **Verify a checksum** (`py-02-digest`, difficulty 2, 120 pts, pyodide) — You have the file bytes and an expected digest. Complete `sha256_hex` so it returns the hex digest. **Watch the trap**: unbounded `int(digest, 16)` comparisons br... 6 assertions, 3 hints, one Stretch goal.
+- **Three layers of encryption** (`py-03-decoder`, difficulty 2, 150 pts, pyodide) — The payload is base64, under it ROT13, under that a reversed string. Complete `decode_blob` so it returns the plaintext. Two gotchas: `base64.b64decode` needs byt... 5 assertions, 3 hints, one Stretch goal.
+- **Decode a JWT and spot the unsigned one** (`py-05-jwt`, difficulty 3, 190 pts, pyodide) — A JWT is three base64**url** parts separated by dots. Complete `decode_payload` so it returns the payload as a dictionary, and `is_unsigned` so it reports a token... 8 assertions, 3 hints, one Stretch goal.
 
 ### Cybersecurity
-- **Spot an injection attempt** (`py-04-sqli`, difficulty 3, 180 pts, pyodide) — You get part of an HTTP query. Complete `is_injection` so it returns `True` when the value looks like a SQL injection attempt: `' OR`, `" OR`, `UNI...
+
+- **Spot an injection attempt** (`py-04-sqli`, difficulty 3, 180 pts, pyodide) — You get part of an HTTP query. Complete `is_injection` so it returns `True` when the value looks like a SQL injection attempt: `' OR`, `" OR`, `UNION SELECT`, `;... 8 assertions, 3 hints, one Stretch goal.
+- **Redact a card number in a log** (`rb-02-redact`, difficulty 2, 140 pts, vm) — Masking card numbers is real work in logs and incident reports, so this lab starts in the downloadable lab machine. Verified by `labcheck` on the lab VM.
+- **Name the technique in the log** (`sec-01-technique`, difficulty 2, 120 pts, quiz) — A fragment of a WAF log from your own environment: Verified by `labcheck` on the lab VM.
+- **Count who is hammering the service** (`py-06-ipgrep`, difficulty 2, 150 pts, pyodide) — A firewall log, one line per request. Complete `top_ips` so it returns the addresses seen **at least `threshold` times** (the default is 2 — anything seen once is... 6 assertions, 3 hints, one Stretch goal.
 
 ### Ruby
-- **Enumerable where a loop would go** (`rb-01-enumerable`, difficulty 2, 130 pts, vm) — This track needs a real interpreter, so in v1 the Ruby labs run in the downloadable lab machine.
 
-### Cybersecurity
-- **Redact a card number in a log** (`rb-02-redact`, difficulty 2, 140 pts, vm) — Masking card numbers is real work in logs and incident reports, so this lab starts in the downloadable lab machine.
+- **Enumerable where a loop would go** (`rb-01-enumerable`, difficulty 2, 130 pts, vm) — This track needs a real interpreter, so in v1 the Ruby labs run in the downloadable lab machine. Verified by `labcheck` on the lab VM.
 
 ### Rust
-- **Predict the output: ownership** (`rs-01-predict`, difficulty 3, 160 pts, quiz) — Rust does not compile in the browser, but the compiler is still the best teacher of ownership. Which of these programs **compiles**?
-- **Read a borrow checker error** (`rs-02-panic`, difficulty 4, 180 pts, quiz) — On the lab VM you hit this error:
 
-### Cybersecurity
-- **Name the technique in the log** (`sec-01-technique`, difficulty 2, 120 pts, quiz) — A fragment of a WAF log from your own environment:
-- **Run a service with an unsafe flag (lab VM)** (`vm-01-insecure-flag`, difficulty 3, 200 pts, vm) — This lab series needs a real Linux, a network and a process — none of which can be simulated inside a browser tab. Download the lab VM image (link...
-- **Write your own scanner with ShadowScan** (`sec-l1-webscan`, difficulty 5, 600 pts, vm) — A scanner is only useful if you can trust its output. On the lab machine you get a scope file, a request budget and a fixture of canned responses....
-- **Count requests per client in a sliding window** (`py-07-ratelimit`, difficulty 4, 240 pts, pyodide) — Rate limiting only works if the window really slides. You get request timestamps in seconds. Complete `over_limit` so it returns the client ids tha...
+- **Predict the output: ownership** (`rs-01-predict`, difficulty 3, 160 pts, quiz) — Rust does not compile in the browser, but the compiler is still the best teacher of ownership. Which of these programs **compiles**? Verified by `labcheck` on the lab VM.
 
-### Rust
-- **Safe FFI to eBPF** (`rs-l1-ffi`, difficulty 5, 900 pts, vm) — `bpf_probe_read_user` returns a negative errno and leaves the destination buffer untouched when it fails. Wrap it so a caller can never receive a h...
+## Paid tier — lifetime
 
-### Python
-- **Decode a JWT and spot the unsigned one** (`py-05-jwt`, difficulty 3, 190 pts, pyodide) — A JWT is three base64**url** parts separated by dots. Complete `decode_payload` so it returns the payload as a dictionary, and `is_unsigned` so it...
-
-### Cybersecurity
-- **Count who is hammering the service** (`py-06-ipgrep`, difficulty 2, 150 pts, pyodide) — A firewall log, one line per request. Complete `top_ips` so it returns the addresses seen **more than once**, most requests first, each as an `(ip,...
-
-### Rust
-- **Predict the output: a reference outlives its owner** (`rs-03-borrow`, difficulty 4, 190 pts, quiz) — Which program **compiles**?
+- **Sliding-window rate limiting** (`py-07-ratelimit`, difficulty 4, 240 pts, pyodide) — fixed buckets are the classic bug: a burst split across a boundary gets twice the budget.
+- **Read a borrow checker error** (`rs-02-panic`, difficulty 4, 180 pts, quiz) — `v.push(v.len())`, pick the clean fix, 6 options.
+- **Predict the output: a reference outlives its owner** (`rs-03-borrow`, difficulty 4, 190 pts, quiz) — E0515, returning `&local`, 6 options.
+- **Run a service with an unsafe flag** (`vm-01-insecure-flag`, difficulty 3, 200 pts, vm) — set a flag that leaks a secret into the log and confirm it with one command.
+- **Write your own scanner with ShadowScan** (`sec-l1-webscan`, difficulty 5, 600 pts, vm) — scope, request budget, sorted and diffable output; `labcheck` rejects out-of-scope results.
+- **Safe FFI to eBPF** (`rs-l1-ffi`, difficulty 5, 900 pts, vm) — wrap `bpf_probe_read_user` so a caller never gets a half-filled buffer; `labcheck` builds and runs your tests.
 
 ## Licensing
 

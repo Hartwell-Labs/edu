@@ -70,12 +70,33 @@ case "$TASK" in
 E = [{'id'=>4,'severity'=>'low','type'=>'file_open'},{'id'=>9,'severity'=>'high','type'=>'exec'},
      {'id'=>2,'severity'=>'high','type'=>'file_open'},{'id'=>7,'severity'=>'low','type'=>'auth'},
      {'id'=>1,'severity'=>'low','type'=>'exec'}]
+CALM = [{'id'=>4,'severity'=>'low','type'=>'file_open'},{'id'=>7,'severity'=>'low','type'=>'auth'}]
+
 def suspicious(events)
   events.select { |e| e['severity'] == 'high' || e['type'] == 'exec' }.map { |e| e['id'] }.sort
 end
-exit(suspicious(E) == [1, 2, 9] ? 0 : 1)
+
+def counts_by(events, key)
+  events.each_with_object(Hash.new(0)) { |e, h| h[e[key]] += 1 }
+end
+
+failures = []
+failures << 'suspicious(E) should be [1, 2, 9]'        unless suspicious(E) == [1, 2, 9]
+failures << 'a quiet log yields nothing'                unless suspicious(CALM) == []
+failures << 'an empty log yields nothing'               unless suspicious([]) == []
+failures << 'the result must be sorted, not input order' unless suspicious(E) == suspicious(E).sort
+failures << 'every id is unique'                        unless suspicious(E).uniq == suspicious(E)
+failures << 'counts_by should group by severity'        unless counts_by(E, 'severity') == {'low'=>3, 'high'=>2}
+failures << 'a grouped key with no events is 0'         unless counts_by([], 'type').values == []
+
+if failures.empty?
+  puts 'OK  rb-01-enumerable: pipeline, empty input, sorting, grouping'
+  exit 0
+end
+failures.each { |f| puts "FAIL  rb-01-enumerable: #{f}" }
+exit 1
 RB
-    ruby /tmp/t.rb && echo "OK  rb-01-enumerable" || echo "FAIL  rb-01-enumerable"
+    ruby /tmp/t.rb
     exit $? ;;
   rb-02-redact)
     cat > /tmp/r.rb <<'RB'
@@ -84,11 +105,30 @@ def redact(text)
   out = text.gsub(/\b(?:\d{4}[ -]){3}\d{4}\b/) { |m| count += 1; '****-****-****-' + m[-4, 4] }
   [out, count]
 end
-raise unless redact('karta 4111 1111 1111 1111 odrzucona') == ['karta ****-****-****-1111 odrzucona', 1]
-raise unless redact('4111-1111-1111-1111') == ['****-****-****-1111', 1]
-raise unless redact('brak danych') == ['brak danych', 0]
+
+failures = []
+def check(failures, label, got, want)
+  failures << "#{label}: got #{got.inspect}, want #{want.inspect}" unless got == want
+end
+
+check(failures, 'spaced card in a sentence',
+      redact('card 4111 1111 1111 1111 declined'), ['card ****-****-****-1111 declined', 1])
+check(failures, 'dashed card alone', redact('4111-1111-1111-1111'), ['****-****-****-1111', 1])
+check(failures, 'no card at all', redact('no data here'), ['no data here', 0])
+check(failures, 'two cards, two replacements',
+      redact('4111 1111 1111 1111 and 5555 5555 5555 5555'), ['****-****-****-1111 and ****-****-****-5555', 2])
+check(failures, 'empty string', redact(''), ['', 0])
+check(failures, 'the last four digits survive',
+      redact('4111 1111 1111 1111')[0].end_with?('1111'), true)
+
+if failures.empty?
+  puts 'OK  rb-02-redact: spacing variants, multiple cards, no-match, empty input'
+  exit 0
+end
+failures.each { |f| puts "FAIL  rb-02-redact: #{f}" }
+exit 1
 RB
-    ruby /tmp/r.rb && echo "OK  rb-02-redact" || echo "FAIL  rb-02-redact"
+    ruby /tmp/r.rb
     exit $? ;;
   sec-l1-webscan)
     # The lab asks for /home/student/scan.json: one entry per target, only in
