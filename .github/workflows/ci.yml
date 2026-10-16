@@ -1,0 +1,188 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Katalog jest generowany, wiec to co tu leci jest produktem — 307 lekcji,
+# kazda z rozwiazaniem referencyjnym i testami wywiedzionymi ze wspolnej
+# specyfikacji. Gatek sa dwie i obie maja sens wylacznie dlatego, ze sa
+# automatyczne: check-tasks.py uruchamia kazda lekcje na jej rozwiazaniu,
+# a build.sh --test odpala kazdy weryfikator maszyny labowej na poprawnej
+# odpowiedzi I na celowo blednej. Wczoraj wykryly ~40 bledow, ktorych czlowiek
+# by nie zobaczyl.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  katalog:
+    name: 307 lekcji musi dac sie rozwiazac
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: generator (odrzuca lekcje bez obszaru i z indeksem poza polem)
+        run: python3 tools/gen_tasks.py
+
+      - name: katalog deterministyczny
+        run: |
+          # Jesli generator jest niefalstwliwy, to zmiana w specyfikacji bez
+          # zmiany w wyniku jest bledem — a nie kosmetyka.
+          python3 tools/gen_tasks.py >/dev/null
+          git diff --exit-code --stat -- public/tasks/index.json \
+            || { echo "::error::wygenerowany katalog rozni sie od tego w repo — uruchom tools/gen_tasks.py i zapisz"; exit 1; }
+
+      - name: kazda lekcja na wlasnym rozwiazaniu
+        run: python3 check-tasks.py
+
+  maszyna-labowa:
+    name: 21 weryfikatorow odrzucajacych zle rozwiazania
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ruby
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ruby
+          ruby -v
+
+      - name: rustc (dwa laby to kompilacja)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustc --version
+
+      - name: kazdy weryfikator na dobrej odpowiedzi
+        run: bash lab-vm/build.sh --test
+
+  deploy-preview:
+    name: worker startuje i naglowki sa na miejscu
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: buduje i uruchamia workera
+        run: |
+          npm i -g wrangler@4
+          # Worker rusza zanim cokolwiek ruszy, wiec baza musi byc gotowa
+          # zanim pojdzie pierwszy request do /api/auth.
+          wrangler d1 migrations apply anvil --local
+          wrangler dev --port 8787 --ip 127.0.0.1 &
+          npx --yes wait-on http://127.0.0.1:8787/healthz -t 60000
+
+      - name: healthz
+        run: curl -fsS http://127.0.0.1:8787/healthz | tee /dev/stderr | grep -q '"ok":true'
+
+      - name: katalog bez rozwiazan referencyjnych
+        run: |
+          # Najwazniejsza bramka: /api/manifest nie moze oddac pola solution,
+          # bo inaczej kazda z 307 lekcji jest do skopiowania jednym zapytaniem.
+          curl -fsS http://127.0.0.1:8787/api/manifest -o /tmp/m.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("/tmp/m.json"))
+          tasks = d["tasks"]
+          leaked = [t["id"] for t in tasks if "solution" in t]
+          assert not leaked, f"archiwum ujawnia rozwiazania: {leaked[:5]}"
+          assert len(tasks) >= 300, f"katalog shrunal do {len(tasks)} lekcji"
+          assert sum(1 for t in tasks if t.get("free")) == 10, "darmowy tier musi miec 10 lekcji"
+          print(f"OK — {len(tasks)} lekcji, 0 rozwiazan w archiwum")
+          PY
+
+      - name: /api/catalog jest lekki
+        run: |
+          curl -fsS http://127.0.0.1:8787/api/catalog -o /tmp/c.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("/tmp/c.json"))
+          keys = set(d["tasks"][0])
+          assert keys == {"id","track","area","title","difficulty","points","executor","free"}, keys
+          print("OK — katalog ma tylko pola potrzebne do listy i panelu")
+          PY
+
+      - name: panel i strony odpowiadaja
+        run: |
+          for p in / /panel/ /lab/ /verify/ /llms.txt; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8787$p")
+            echo "  $p -> $code"
+            [ "$code" = "200" ] || { echo "::error::$p zwraca $code"; exit 1; }
+          done
+
+      - name: rejestracja odrzuca domeny rezerwowe i ma limit
+        run: |
+          V=$(python3 -c "import hashlib;print(hashlib.pbkdf2_hmac('sha256',b'x'*12,b'anvil:ci',210000).hex())")
+          # RFC 2606 — nikt prawdziwy nie ma takiego adresu, a boty tak
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8787/api/auth/register \
+            -H 'content-type: application/json' \
+            -d "{\"handle\":\"ci1\",\"email\":\"x@example.com\",\"verifier\":\"$V\",\"password_length\":12}")
+          [ "$code" = "400" ] || { echo "::error::domena rezerwowa przeszla ($code)"; exit 1; }
+          echo "  domena rezerwowa odrzucona"
+
+          # limit 5 rejestracji na godzine z jednego adresu
+          for i in $(seq 1 8); do
+            curl -s -o /dev/null -X POST http://127.0.0.1:8787/api/auth/register \
+              -H 'content-type: application/json' \
+              -d "{\"handle\":\"ci$i\",\"email\":\"ci$i@gmail.com\",\"verifier\":\"$V\",\"password_length\":12}"
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8787/api/auth/register \
+            -H 'content-type: application/json' \
+            -d "{\"handle\":\"ciX\",\"email\":\"ciX@gmail.com\",\"verifier\":\"$V\",\"password_length\":12}")
+          [ "$code" = "429" ] || { echo "::error::limit IP nie zadzialal (otrzymano $code)"; exit 1; }
+          echo "  limit IP zadzialal"
+
+  bezpieczenstwo:
+    name: bramki na stronie glownej (hartwell-labs.pl)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: naglowki na produkcji
+        run: |
+          # Domena firmy bezpieczenstwa bez CSP i HSTS to pierwsza rzecz,
+          # na ktora patrzy kazdy skaner reputacyjny. Sprawdzamy to z zewnatrz,
+          # wiec bramka chroni rowniez przed wyregresja w przyszlosci.
+          for h in strict-transport-security content-security-policy \
+                   x-content-type-options referrer-policy permissions-policy \
+                   x-frame-options; do
+            v=$(curl -sI https://hartwell-labs.pl/ | grep -i "^$h:" || true)
+            if [ -z "$v" ]; then
+              echo "::error::brak naglowka $h na stronie glownej"
+              exit 1
+            fi
+            echo "  OK  $h"
+          done
+
+      - name: uwierzytelnianie poczty
+        run: |
+          q() { curl -s "https://cloudflare-dns.com/dns-query?name=$1&type=$2" -H 'accept: application/dns-json'; }
+          spf=$(q hartwell-labs.pl 16 | python3 -c "import json,sys;print(' '.join(a['data'] for a in json.load(sys.stdin).get('Answer',[])))")
+          echo "  SPF: $spf"
+          case "$spf" in
+            *"include:amazonses.com"*) echo "  OK  SPF zawiera amazonses (Resend)" ;;
+            *) echo "::error::SPF nie zawiera include:amazonses.com — maile z Resend padaja na SPF"; exit 1 ;;
+          esac
+          dmarc=$(q _dmarc.hartwell-labs.pl 16 | python3 -c "import json,sys;print(' '.join(a['data'] for a in json.load(sys.stdin).get('Answer',[])))")
+          echo "  DMARC: $dmarc"
+          case "$dmarc" in
+            *"rua="*) echo "  OK  DMARC ma raporty zbiorcze" ;;
+            *) echo "::error::DMARC bez rua= — awarie uwierzytelniania biją po cichu"; exit 1 ;;
+          esac
