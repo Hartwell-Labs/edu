@@ -84,10 +84,36 @@ def main():
                 print(f"         - {c['name']}: {c['detail']}")
                 bad += 1
         elif ex == "quiz":
-            ok = bool(t.get("answer"))
-            print(f"  {'OK   ' if ok else 'BLAD '} {t['id']:24} quiz, {len(t.get('choices', []))} odpowiedzi")
+            choices = t.get("choices", [])
+            answer = t.get("answer")
+            answer = t.get("answer")
+            try:
+                if isinstance(answer, (list, tuple)):
+                    answer = answer[0]
+                answer = int(answer) if isinstance(answer, str) else answer
+            except (TypeError, ValueError, IndexError):
+                answer = None
+            ok = bool(choices) and len(choices) >= 2 and answer is not None and 0 <= answer < len(choices)
+            # Kawiero: odpowiedź odznaczona musi byc dokladnie jedna
+            # poprawna. Zla (member nie jest wybierane, wiecej niz jedna
+            # odpowiedz poprawna, brak wartosci) to bledny zadanie.
+            if ok:
+                sel = choices[answer]
+                sel_low = sel.lower()
+                # Wybrana poprawna odpowiedz musi sie klinicznie zapowiedziec:
+                # ma byc unikatowa i zdanie. (Nie wymagamy zasady logicznej —
+                # tylko, zeby autor nie wpadl w typowe puene: wyboru dwojga
+                # razy, wylosowanie pustego czy powiazania z inny zadanie.)
+                occ = sum(1 for c in choices if c.lower() == sel_low)
+                ok = occ == 1
+            print(f"  {'OK   ' if ok else 'BLAD '} {t['id']:24} quiz, {len(choices)} odpowiedzi")
             if not ok:
                 bad += 1
+                print(f"         - quiz answer must be a valid index into the choices "
+                      f"(0..{len(choices)-1}); got {answer!r}")
+                for i, c in enumerate(choices):
+                    print(f"         -   [{i}] {c}")
+
         elif ex == "vm":
             # katalog jest w pelni darmowy, wiec kazde zadanie VM musi miec komplet "check"
             ok = bool(t.get("vm_check")) and bool(t.get("vm_accept"))
