@@ -67,6 +67,71 @@ const randHex = (n) => hex(crypto.getRandomValues(new Uint8Array(n)));
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{2,23}$/;
 const EMAIL_RE = /^[^@\s]+@[^@\s.]+\.[^@\s]+$/;
 
+/* Domeny, ktorych nikt prawdziwy nie nie ma. RFC 2606 i 6761 rezerwują je dla
+   dokumentacji, a boty lubia je wklejać, bo nie dostaną odpowiedzi z serwera
+   pocztowej — czyli za darmo wygenerują nam wysyłkę. */
+const RESERVED_DOMAINS = new Set([
+  "example.com", "example.org", "example.net", "example.edu", "example.co.uk",
+  "test", "localhost", "invalid", "local", "domain.com", "email.com",
+  "mailinator.com", "guerrillamail.com", "10minutemail.com", "yopmail.com",
+  "trashmail.com", "sharklasers.com", "getnada.com", "temp-mail.org",
+]);
+
+/* ---------------------------------------------------------------- ratelimit
+   Rejestracja i wysylka maila kosztuja realne pieniadze (Resend) i niszcza
+   reputacje domeny, wiec oba endpointy musza miec limit. Najpierw natywny
+   binding Cloudflare (dziala miedzy izolatami), a gdy go nie ma — kubelek
+   w pamieci, ktory i tak zatrzyma naiwnego bota. */
+const buckets = new Map();
+const BUCKET_MAX = 2000;          // izolaty sa krotkotrwale, wiec czyscimy
+const RULES = {
+  register: { limit: 5, windowMs: 3600_000 },   // 5 kont na godzine z jednego IP
+  resend: { limit: 3, windowMs: 3600_000 },     // 3 ponowienia na godzine
+  access: { limit: 3, windowMs: 3600_000 },     // 3 prośby o dostęp na godzine
+};
+
+function clientIp(request) {
+  return request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "0.0.0.0";
+}
+
+function localBucket(rule, key) {
+  // Date.now() wprost, nie helper `now()`: ten blok jest zdefiniowany wyzej
+  // niz const now, wiec wolanie go stamtad wpada w strefe czasu martwego
+  // i kazda rejestracja konczy sie 500.
+  const t = Date.now();
+  const k = rule + ":" + key;
+  let b = buckets.get(k);
+  if (!b || t > b.reset) { b = { count: 0, reset: t + RULES[rule].windowMs }; buckets.set(k, b); }
+  if (buckets.size > BUCKET_MAX) {
+    for (const [bk, bv] of buckets) if (t > bv.reset) buckets.delete(bk);
+    if (buckets.size > BUCKET_MAX) buckets.delete(buckets.keys().next().value);
+  }
+  b.count++;
+  return { ok: b.count <= RULES[rule].limit, left: Math.max(0, RULES[rule].limit - b.count) };
+}
+
+/**
+ * Kubelek na adres klienta. Swiadomie w pamieci, nie przez binding Cloudflare:
+ * natywny rate limiting dziala tylko na krawedzi, przez co `wrangler dev`
+ * przestaje wstac, a lokalne testy przeplywu nie da sie odtworzyc. Rozproszony
+ * atak mnozy ten limit, ale nie przekracza dziennego budzetu wysylki, ktory jest
+ * twarda granica kosztu.
+ */
+function rateLimited(request, rule) {
+  const b = localBucket(rule, clientIp(request));
+  return b.ok ? null : "Too many attempts from this address. Try again later.";
+}
+
+/** Dzienny limit wysylki — ostatnia linia obrony przed kazdym sposobem obejcia limitu IP. */
+async function mailBudget(env) {
+  const day = new Date().toISOString().slice(0, 10);
+  const row = await env.DB.prepare(
+    "SELECT count(*) AS n FROM mail_outbox WHERE created_at >= ?",
+  ).bind(Date.parse(day + "T00:00:00Z")).first();
+  return (row?.n || 0) < 200;
+}
+
+
 /** Constant-time comparison — no timing leak. */
 function timingSafeEqual(a, b) {
   if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
@@ -189,15 +254,23 @@ async function sendVerification(env, user) {
 
 /* ------------------------------------------------------------------ auth */
 async function register(request, env) {
+  const limited = rateLimited(request, "register");
+  if (limited) return json({ error: limited }, { status: 429 });
+
   const body = await request.json().catch(() => ({}));
   const handle = String(body.handle || "").trim().toLowerCase();
   const email = String(body.email || "").trim().toLowerCase();
   const verifier = String(body.verifier || "").trim();
 
+  // Pulapka na robota: pole, ktorego czlowiek nie widzi i nie wypelnia.
+  if (body.company) return json({ ok: true, handle, email_verified: false });
+
   if (!HANDLE_RE.test(handle))
     return json({ error: "Nickname: 3–24 characters, lowercase letters, digits, hyphen or underscore." }, { status: 400 });
   if (!EMAIL_RE.test(email))
     return json({ error: "That e-mail address does not look valid." }, { status: 400 });
+  if (RESERVED_DOMAINS.has(email.split("@")[1]))
+    return json({ error: "That address cannot receive mail, so we cannot confirm it." }, { status: 400 });
   if (!/^[0-9a-f]{64}$/.test(verifier))
     return json({ error: "Missing a valid password verifier (generate it in the browser)." }, { status: 400 });
   if (String(body.password_length || 0) < 10)
@@ -221,8 +294,11 @@ async function register(request, env) {
 
   const token = await createSession(env.DB, id);
   const user = { id, handle, email };
-  await sendVerification(env, user);
-  return json({ ok: true, handle, email_verified: false }, { headers: { "set-cookie": sessionCookie(token) } });
+  const sent = (await mailBudget(env)) ? await sendVerification(env, user) : false;
+  return json(
+    { ok: true, handle, email_verified: false, mail_sent: sent },
+    { headers: { "set-cookie": sessionCookie(token) } },
+  );
 }
 
 async function login(request, env) {
@@ -307,8 +383,12 @@ export default {
       }
 
       if (p === "/api/auth/resend" && request.method === "POST") {
+        const limited = rateLimited(request, "resend");
+        if (limited) return json({ error: limited }, { status: 429 });
         const user = await currentUser(request, env);
         if (!user) return json({ error: "no session" }, { status: 401 });
+        if (!(await mailBudget(env)))
+          return json({ error: "We have hit today's sending limit. Try again tomorrow." }, { status: 503 });
         const row = await env.DB.prepare("SELECT verify_sent_at, email_verified FROM users WHERE id = ?")
           .bind(user.id).first();
         if (row && row.email_verified) return json({ ok: true, already: true });
@@ -382,10 +462,14 @@ export default {
         // Prosba o dostep do drugiego tieru. Swiadomie bez platnosci karta —
         // brak procesora jest lepszy niz udawany checkout. Trafia do D1,
         // admin nadaje plan przez admin.py grant.
+        const limited = rateLimited(request, "access");
+        if (limited) return json({ error: limited }, { status: 429 });
         const body = await request.json().catch(() => ({}));
         const email = String(body.email || "").trim().toLowerCase();
         if (!EMAIL_RE.test(email))
           return json({ error: "That e-mail address does not look valid." }, { status: 400 });
+        if (RESERVED_DOMAINS.has(email.split("@")[1]))
+          return json({ error: "That address cannot receive mail, so we cannot answer." }, { status: 400 });
         const why = String(body.why || "").trim().slice(0, 2000);
         const handle = String(body.handle || "").trim().toLowerCase().slice(0, 24);
         const user = await currentUser(request, env);

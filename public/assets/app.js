@@ -146,6 +146,12 @@
       '<h2 id="t"></h2><p class="sub" id="s"></p>' +
       '<div class="tabs"><button id="tab-r">New account</button><button id="tab-l">I have an account</button></div>' +
       '<form id="f" autocomplete="on">' +
+      // Pole-pulapka: niewidoczne i nie wypelniane przez czlowieka. Bez niego
+      // bot zaklada konta na adresy, ktore nic nie dostana, i generuje nam
+      // wysylke w Resend za kazdym razem.
+      '<div aria-hidden="true" style="position:absolute;left:-9999px;height:0;overflow:hidden">' +
+      '<label for="i-company">Company</label>' +
+      '<input id="i-company" name="company" tabindex="-1" autocomplete="off"></div>' +
       '<div class="field" id="f-handle"><label for="i-handle">Nickname</label><input id="i-handle" autocomplete="username" placeholder="e.g. kija"></div>' +
       '<div class="field" id="f-email"><label for="i-email">E-mail</label><input id="i-email" type="email" autocomplete="email" placeholder="you@example.com"></div>' +
       '<div class="field"><label for="i-pass">Password</label><input id="i-pass" type="password" autocomplete="current-password" placeholder="at least 10 characters"></div>' +
@@ -186,7 +192,7 @@
             var handle = $("i-handle", d).value.trim().toLowerCase();
             var email = $("i-email", d).value.trim().toLowerCase();
             return derive(pass, handle).then(function (v) {
-              return api("/api/auth/register", { method: "POST", body: { handle: handle, email: email, verifier: v, password_length: pass.length } });
+              return api("/api/auth/register", { method: "POST", body: { handle: handle, email: email, verifier: v, password_length: pass.length, company: $("i-company", d).value } });
             });
           })()
         : (function () {
@@ -196,7 +202,11 @@
             });
           })();
       go.then(function (res) {
-        if (res.error || !res.ok) { err.textContent = res.error || "Something went wrong."; btn.disabled = false; paint(); return; }
+        if (res.error || !res.ok) {
+          err.textContent = res.error || "Something went wrong. Try again in a moment.";
+          btn.disabled = false; paint();
+          return;
+        }
         // postęp zapisany w przeglądarce wędruje na konto (także przy samym logowaniu)
         if (Object.keys(guest).length) {
           return api("/api/progress/merge", { method: "POST", body: { tasks: guest } });

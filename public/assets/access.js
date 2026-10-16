@@ -85,24 +85,27 @@
     var box = document.getElementById("v");
     if (!box) return;
     if (!/^[0-9a-f]{48}$/.test(token)) {
-      box.innerHTML = '<div class="mark no">!</div><h1>This link is not valid</h1>'
-        + '<p>Confirmation links look like a single long string and work once. If this one came from '
+      box.innerHTML = '<div class="vpage"><div class="mark no">!</div>'
+        + "<h1>This link is not valid</h1>"
+        + "<p>Confirmation links look like a single long string and work once. If this one came from "
         + "an older mail, ask for a new one from the panel.</p>"
-        + '<p style="margin-top:20px"><a class="btn btn-ghost" href="/panel">Go to your progress</a></p>';
+        + '<p style="margin-top:20px"><a class="btn btn-ghost" href="/panel">Go to your progress</a></p></div>';
       return;
     }
     box.innerHTML = '<div class="vpage"><p>Confirming…</p></div>';
     api("/api/auth/verify?token=" + encodeURIComponent(token)).then(function (r) {
       if (r.ok) {
-        box.innerHTML = '<div class="mark ok">✓</div><h1>E-mail confirmed</h1>'
+        box.innerHTML = '<div class="vpage">'
+          + '<div class="mark ok">\u2713</div><h1>E-mail confirmed</h1>'
           + "<p>Your account can be recovered by mail from now on, and your progress follows you to "
-          + "any device. Nothing else about you changes — no newsletter, no telemetry.</p>"
-          + '<p style="margin-top:22px"><a class="btn btn-primary" href="/lab">Back to the labs</a></p>';
+          + "any device. Nothing else about you changes \u2014 no newsletter, no telemetry.</p>"
+          + '<p style="margin-top:22px"><a class="btn btn-primary" href="/lab">Back to the labs</a></p></div>';
       } else {
-        box.innerHTML = '<div class="mark no">!</div><h1>This link no longer works</h1>'
+        box.innerHTML = '<div class="vpage"><div class="mark no">!</div>'
+          + "<h1>This link no longer works</h1>"
           + "<p>" + esc(r.error || "The link expired or was already used.") + " Confirmation links "
           + "last 24 hours and work once. You can ask for another from the panel.</p>"
-          + '<p style="margin-top:22px"><a class="btn btn-ghost" href="/panel">Ask for a new link</a></p>';
+          + '<p style="margin-top:22px"><a class="btn btn-ghost" href="/panel">Ask for a new link</a></p></div>';
       }
     }).catch(function () {
       box.innerHTML = '<div class="mark no">!</div><h1>Network trouble</h1>'
