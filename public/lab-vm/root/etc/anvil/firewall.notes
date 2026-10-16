@@ -1,0 +1,3 @@
+Ktory port jest wystawiony na swiat, a ktory tylko na interfejs wewnetrzny?
+Odpowiedz zapisz jako /home/student/firewall.json:
+  {"port": <liczba>, "interface": "eth0"}

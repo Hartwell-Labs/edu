@@ -1,0 +1,10 @@
+{
+  "subject": "CN=lab.internal",
+  "not_after": "Nov 20 09:19:44 2027 GMT",
+  "hostname": "lab.internal",
+  "san": [
+    "lab.internal",
+    "localhost",
+    "10.10.0.7"
+  ]
+}

@@ -1,369 +1,344 @@
 #!/usr/bin/env bash
-# lab-vm/build.sh — builds the virtual machine image used by the Anvil labs.
+# lab-vm/build.sh — buduje maszyne wirtualna dla labow Anvila.
 #
-# The lab VM is a qcow2 image with a minimal userland (python3, ruby, rust),
-# a deliberately vulnerable service for the security labs, and `labcheck`, which
-# verifies solutions without sending anything outside.
+# Maszyna to qcow2 z minimalnym userlandem (python3, ruby, rust), celowo
+# podatna usluga oraz `labcheck`, ktory weryfikuje rozwiazania bez sieci.
 #
 #   bash lab-vm/build.sh           # zbuduj obraz w lab-vm/anvil-lab.qcow2
 #   bash lab-vm/build.sh --run     # zbuduj i odpal w QEMU
-#   bash lab-vm/build.sh --host    # provisioning scripts only, no image
+#   bash lab-vm/build.sh --host    # tylko przygotuj katalog, do testow
+#   bash lab-vm/build.sh --test    # odpal wszystkie weryfikatory na sucho
 #
-# Wymagania do pełnego obrazu: qemu-system-x86_64, qemu-img, genisoimage|xorriso.
-# On hosts without those, --host configures the service locally (good enough for testing).
+# Wymagania do pelnego obrazu: qemu-system-x86_64, qemu-img, genisoimage|xorriso.
+# Bez nich --host konfiguruje usluwe lokalnie (wystarczy do testow).
+#
+# root/ jest ZRODLEM PRAWDY: to co tam lezi, trafia do obrazu. build.sh
+# niczego nie generuje w sciezce — inaczej root i obraz rozjezdza sie
+# po kilku miesiacach, a polowa laboratoriow przestaje miec weryfikator.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$HERE/root"
 NAME="anvil-lab"
 IMG="$HERE/$NAME.qcow2"
 SIZE="${ANVIL_VM_SIZE:-4G}"
 MEM="${ANVIL_VM_MEM:-2048}"
 PORT_SSH="${ANVIL_VM_SSH:-2222}"
 RUN_MODE=0
+HOST_ONLY=0
+TEST_ONLY=0
+STAGE=""
 
 for a in "$@"; do
   case "$a" in
     --run) RUN_MODE=1 ;;
     --host) HOST_ONLY=1 ;;
+    --test) TEST_ONLY=1 ;;
   esac
 done
 
 log() { printf '\033[2m[lab-vm]\033[0m %s\n' "$1"; }
 die() { printf '\033[31m[lab-vm] %s\033[0m\n' "$1" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "brak $1 — zainstaluj albo uzyj --host"; }
+cleanup() { [ -n "$STAGE" ] && [ -d "$STAGE" ] && rm -rf "$STAGE"; }
+trap cleanup EXIT
 
-need() { command -v "$1" >/dev/null 2>&1 || die "missing $1 — install it or use --host"; }
+# ------------------------------------------------------------------ stage
+# Kopiujemy root/ do katalogu roboczego i poprawiamy uprawnienia — same
+# pliki w repo zostaja nietkniete.
+stage() {
+  [ -d "$ROOT" ] || die "brak katalogu $ROOT"
+  STAGE="$(mktemp -d "${TMPDIR:-/tmp}/anvil-root.XXXXXX")"
+  cp -a "$ROOT/." "$STAGE/"
+  chmod +x "$STAGE/bin/labcheck" "$STAGE/bin/busybox" \
+            "$STAGE/usr/local/bin/anvil-lab" "$STAGE/usr/local/bin/anvil-setuid" \
+            "$STAGE/opt/anvil/anvil-lab" "$STAGE/usr/local/lib/anvil/check.py" 2>/dev/null || true
+  # Podatnosci, o ktore pytaja laby, musza byc odtwarzalne po rozpakowaniu.
+  chmod 4755 "$STAGE/usr/local/bin/anvil-setuid" 2>/dev/null || true
+  chmod 0644 "$STAGE/home/student/.anvil/id_ed25519" 2>/dev/null || true
+  chmod 0777 "$STAGE/var/lib/anvil-lab/state" 2>/dev/null || true
+  mkdir -p "$STAGE"/{proc,sys,dev,tmp,run}
+  log "stage gotowy: $STAGE"
+}
 
-# ---------------------------------------------------------------- obraz ISO
-build_iso() {
-  local root="$HERE/root"
-  log "preparing the filesystem ($root)"
-  rm -rf "$root"; mkdir -p "$root"/{bin,etc,home/lab,lib,usr/bin,usr/sbin,tmp,var/lib,var/log,proc,sys,dev}
+# ------------------------------------------------------------------- test
+# Odpala kazdy weryfikator na dwoch rozwiazaniach: jednym poprawnym
+# i jednym celowo zlym. Weryfikator, ktory przepuszcza zly, jest
+# bezuzyteczny — i taki wlasnie bug najczesciej przepada.
+install_reference_solutions() {
+  local s="$STAGE/home/student"
+  ANVIL_LOG="$STAGE/var/log/anvil-lab.log" \
+    python3 - "$STAGE" <<'PY'
+import json, pathlib, sys
 
-  cat > "$root/etc/os-release" <<'EOF'
-NAME="Anvil Lab"
-ID=anvillab
-VERSION_ID="1"
-PRETTY_NAME="Anvil Lab VM"
-EOF
+stage = pathlib.Path(sys.argv[1])
+s = stage / "home/student"
+fix = s / "fixtures"
 
-  # /bin/labcheck — solution checker. No network: everything is local.
-  cat > "$root/bin/labcheck" <<'EOF'
-#!/bin/sh
-# labcheck — checks your solution. Usage: labcheck --task <id>
-TASK=""
-[ "$1" = "--task" ] && TASK="$2"
-case "$TASK" in
-  vm-01-insecure-flag|vm-01)
-    log=$(cat "${ANVIL_LOG:-/var/log/anvil-lab.log}" 2>/dev/null)
-    if printf '%s' "$log" | grep -q 'debug=true'; then
-      if printf '%s' "$log" | grep -q 'ANVIL_DEBUG_TOKEN='; then
-        echo "OK  vm-01: the flag is in the log, and so is the secret — exactly what you did not want"
-        exit 0
-      fi
-      echo "FAIL  the flag is set, but the secret never reached the log"
-      exit 1
-    fi
-    echo "FAIL  start the service first: ANVIL_DEBUG=true /usr/local/bin/anvil-lab serve"
-    exit 1 ;;
-  rb-01-enumerable)
-    cat > /tmp/t.rb <<'RB'
-E = [{'id'=>4,'severity'=>'low','type'=>'file_open'},{'id'=>9,'severity'=>'high','type'=>'exec'},
-     {'id'=>2,'severity'=>'high','type'=>'file_open'},{'id'=>7,'severity'=>'low','type'=>'auth'},
-     {'id'=>1,'severity'=>'low','type'=>'exec'}]
-CALM = [{'id'=>4,'severity'=>'low','type'=>'file_open'},{'id'=>7,'severity'=>'low','type'=>'auth'}]
+def w(name, data):
+    (s / name).write_text(json.dumps(data, indent=2) + "\n")
 
+def ex(name):
+    return json.loads((fix / f"expected-{name}.json").read_text())
+
+def fx(name):
+    return json.loads((fix / name).read_text())
+
+targets = [l.strip() for l in (s / "targets.txt").read_text().splitlines()
+           if l.strip() and not l.startswith("#")]
+w("scan.json", [{"host": h, "status": fx("responses.json")[h]["status"]}
+                for h in sorted(targets)])
+w("proc.json", fx("process-tree.json"))
+
+suid = ex("suid")
+w("suid.json", {"path": suid["path"], "owner_uid": suid["owner_uid"],
+                "privilege": "setuid: effective uid follows the file owner, so this runs as root"})
+
+ma = fx("mount-audit.json")
+w("mounts.json", {"world_writable": ma["world_writable"], "services": ma["services"]})
+
+per = fx("persistence.json")
+w("persist.json", {"path": per["path"], "line": per["any_of"][0] + " ..."})
+
+w("tcp.json", {"syn_flood": "fills the accept backlog with half-open connections",
+               "backlog": "tcp_max_syn_backlog",
+               "mitigation": "net.ipv4.tcp_syncookies issues a cookie instead of state"})
+
+cert = ex("cert")
+w("cert.json", {"subject": cert["subject"], "not_after": cert["not_after"],
+                "hostname": cert["hostname"], "covers_hostname": True})
+
+w("ports.json", sorted(fx("open-ports.json")))
+w("history.json", {"commands": ["curl -H 'X-Api-Key: anvil-live-key-4711' ...",
+                                "cp ~/.anvil/id_ed25519 /tmp/x",
+                                "scp ~/.anvil/id_ed25519 backup@drop.internal:~/k"]})
+(s / "key.json").write_text(json.dumps(
+    {"path": "/home/student/.anvil/id_ed25519", "before": "644", "after": "600"},
+    indent=2) + "\n")
+
+# klucz odpowiedzi kopiujemy wprost — plik expected-X.json jest jednoczesnie
+# tym, co student musi napisac, wiec zawiera juz dokladnie oczekiwany JSON.
+for name in ("rotate", "timeline", "dns", "firewall"):
+    (s / f"{name}.json").write_text((fix / f"expected-{name}.json").read_text())
+
+# celowo zle odpowiedzi — dla kontroli, ze weryfikator cos odrzuca
+(s / ".anvil").mkdir(exist_ok=True)
+(s / ".anvil/scan.bad.json").write_text(json.dumps(
+    [{"host": targets[0], "status": 200},
+     {"host": "lab-d.internal", "status": 200},
+     {"host": targets[0], "status": 200}]))
+(s / ".anvil/suid.bad.json").write_text(json.dumps(
+    {"path": suid["path"], "owner_uid": 1000}))
+(s / ".anvil/cert.bad.json").write_text(json.dumps(
+    {"subject": "CN=wrong", "not_after": "2020-01-01", "hostname": "other.internal"}))
+(s / ".anvil/ports.bad.json").write_text(json.dumps(sorted(fx("open-ports.json"))[:-1]))
+(s / ".anvil/rotate.bad.json").write_text(json.dumps(
+    {"config": "/etc/logrotate.d/anvil-lab", "retention": 99}))
+PY
+
+  # ruby
+  cat > "$s/events.rb" <<'RB'
+E = [{'id' => 4, 'severity' => 'low',  'type' => 'file_open'},
+     {'id' => 9, 'severity' => 'high', 'type' => 'exec'},
+     {'id' => 2, 'severity' => 'high', 'type' => 'file_open'},
+     {'id' => 7, 'severity' => 'low',  'type' => 'auth'},
+     {'id' => 1, 'severity' => 'low',  'type' => 'exec'}]
+CALM = [{'id' => 4, 'severity' => 'low', 'type' => 'file_open'},
+        {'id' => 7, 'severity' => 'low', 'type' => 'auth'}]
 def suspicious(events)
   events.select { |e| e['severity'] == 'high' || e['type'] == 'exec' }.map { |e| e['id'] }.sort
 end
-
 def counts_by(events, key)
   events.each_with_object(Hash.new(0)) { |e, h| h[e[key]] += 1 }
 end
+def flat(h) = h.keys.sort.map { |k| "#{k}:#{h[k]}" }.join(',')
 
-failures = []
-failures << 'suspicious(E) should be [1, 2, 9]'        unless suspicious(E) == [1, 2, 9]
-failures << 'a quiet log yields nothing'                unless suspicious(CALM) == []
-failures << 'an empty log yields nothing'               unless suspicious([]) == []
-failures << 'the result must be sorted, not input order' unless suspicious(E) == suspicious(E).sort
-failures << 'every id is unique'                        unless suspicious(E).uniq == suspicious(E)
-failures << 'counts_by should group by severity'        unless counts_by(E, 'severity') == {'low'=>3, 'high'=>2}
-failures << 'a grouped key with no events is 0'         unless counts_by([], 'type').values == []
-
-if failures.empty?
-  puts 'OK  rb-01-enumerable: pipeline, empty input, sorting, grouping'
-  exit 0
-end
-failures.each { |f| puts "FAIL  rb-01-enumerable: #{f}" }
-exit 1
+puts "suspicious=#{suspicious(E).join(',')}"
+puts "calm=#{suspicious(CALM).join(',')}"
+puts "counts_by_severity=#{flat(counts_by(E, 'severity'))}"
 RB
-    ruby /tmp/t.rb
-    exit $? ;;
-  rb-02-redact)
-    cat > /tmp/r.rb <<'RB'
+  cat > "$s/redact.rb" <<'RB'
 def redact(text)
   count = 0
   out = text.gsub(/\b(?:\d{4}[ -]){3}\d{4}\b/) { |m| count += 1; '****-****-****-' + m[-4, 4] }
   [out, count]
 end
-
-failures = []
-def check(failures, label, got, want)
-  failures << "#{label}: got #{got.inspect}, want #{want.inspect}" unless got == want
-end
-
-check(failures, 'spaced card in a sentence',
-      redact('card 4111 1111 1111 1111 declined'), ['card ****-****-****-1111 declined', 1])
-check(failures, 'dashed card alone', redact('4111-1111-1111-1111'), ['****-****-****-1111', 1])
-check(failures, 'no card at all', redact('no data here'), ['no data here', 0])
-check(failures, 'two cards, two replacements',
-      redact('4111 1111 1111 1111 and 5555 5555 5555 5555'), ['****-****-****-1111 and ****-****-****-5555', 2])
-check(failures, 'empty string', redact(''), ['', 0])
-check(failures, 'the last four digits survive',
-      redact('4111 1111 1111 1111')[0].end_with?('1111'), true)
-
-if failures.empty?
-  puts 'OK  rb-02-redact: spacing variants, multiple cards, no-match, empty input'
-  exit 0
-end
-failures.each { |f| puts "FAIL  rb-02-redact: #{f}" }
-exit 1
 RB
-    ruby /tmp/r.rb
-    exit $? ;;
-  sec-l1-webscan)
-    # The lab asks for /home/student/scan.json: one entry per target, only in
-    # scope, sorted, and never more requests than the budget allows.
-    if [ ! -f /home/student/scan.json ]; then
-      echo "FAIL  sec-l1-webscan: /home/student/scan.json not found — write the scanner first"
-      exit 1
-    fi
-    python3 - <<'PY'
-import json, pathlib, sys
-scope = {l.strip() for l in pathlib.Path('/home/student/targets.txt').read_text().split() if l.strip()}
-budget = int(pathlib.Path('/home/student/budget').read_text().strip())
-try:
-    data = json.loads(pathlib.Path('/home/student/scan.json').read_text())
-except Exception as e:
-    print(f"FAIL  sec-l1-webscan: scan.json is not valid JSON ({e})"); sys.exit(1)
-if not isinstance(data, list) or not data:
-    print("FAIL  sec-l1-webscan: expected a non-empty JSON list of results"); sys.exit(1)
-hosts = [r.get('host') for r in data]
-outside = [h for h in hosts if h not in scope]
-if outside:
-    print(f"FAIL  sec-l1-webscan: out of scope target(s): {', '.join(map(str, outside))}"); sys.exit(1)
-if len(hosts) != len(set(hosts)):
-    print("FAIL  sec-l1-webscan: duplicate hosts — scan each target once"); sys.exit(1)
-if hosts != sorted(hosts):
-    print("FAIL  sec-l1-webscan: results are not sorted by host, so runs cannot be diffed"); sys.exit(1)
-if len(hosts) > budget:
-    print(f"FAIL  sec-l1-webscan: {len(hosts)} requests, budget is {budget}"); sys.exit(1)
-print(f"OK  sec-l1-webscan: {len(hosts)}/{budget} requests, in scope, sorted")
-PY
-    exit $? ;;
-  rs-l1-ffi)
-    # The lab asks for a crate that wraps bpf_probe_read_user safely: it has to
-    # build, and its tests have to pass.
-    if [ ! -d /home/student/ffi ]; then
-      echo "FAIL  rs-l1-ffi: /home/student/ffi not found — put the crate there"
-      exit 1
-    fi
-    if cargo build --quiet --manifest-path /home/student/ffi/Cargo.toml 2>/tmp/ffi-build.log; then
-      if cargo test --quiet --manifest-path /home/student/ffi/Cargo.toml 2>/tmp/ffi-test.log; then
-        echo "OK  rs-l1-ffi: builds clean and the tests pass"
-        exit 0
-      fi
-      echo "FAIL  rs-l1-ffi: builds, but a test failed:"; tail -5 /tmp/ffi-test.log; exit 1
-    fi
-    echo "FAIL  rs-l1-ffi: does not compile:"; tail -8 /tmp/ffi-build.log; exit 1 ;;
-  rs-01-predict|rs-02-panic)
-    # Quizzes are checked in the browser; here you can compile the snippet and
-    # read the compiler's own words.
-    cat > /tmp/main.rs <<'RS'
+  # rust: poprawiona wersja programu z bledem wypozyczenia
+  cat > "$s/main.rs" <<'RS'
 fn main() {
-    let s = String::from("anvil");
-    let t = s;
-    println!("{} {}", s, t);
+    let mut v = vec![1, 2, 3];
+    let first = v[0];
+    v.push(4);
+    println!("{:?} {}", v, first);
 }
 RS
-    mkdir -p /tmp/predict/src && cp /tmp/main.rs /tmp/predict/src/main.rs
-    printf '[package]\nname = "predict"\nversion = "0.1.0"\nedition = "2021"\n' > /tmp/predict/Cargo.toml
-    if cargo build --quiet --manifest-path /tmp/predict/Cargo.toml 2>/tmp/predict.log; then
-      echo "OK  $TASK: compiled — re-read the question, the quiz decides"
+  cat > "$s/src/lib.rs" <<'RS'
+pub fn longest<'a>(a: &'a str, b: &'a str) -> &'a str {
+    if a.len() >= b.len() { a } else { b }
+}
+RS
+  chmod 600 "$s/.anvil/id_ed25519"
+  # Uruchamiamy usluge raz z debug=true, zeby log naprawde zawieral wyciek.
+  ANVIL_DEBUG=true ANVIL_LOG="$STAGE/var/log/anvil-lab.log" \
+    python3 "$STAGE/usr/local/bin/anvil-lab" probe >/dev/null 2>&1 || true
+  local tok
+  tok=$(sed -n 's/.*ANVIL_DEBUG_TOKEN=\([^ ]*\).*/\1/p' "$STAGE/var/log/anvil-lab.log" | head -1)
+  printf '{\n  "token": "%s",\n  "flag": "%s",\n  "note": "not pasted into a chat"\n}\n' \
+    "$tok" "$tok" > "$s/leak.json"
+}
+
+# Probuje zadanie z poprawnym rozwiazaniem, a potem z celowo zlym.
+test_labs() {
+  stage
+  install_reference_solutions
+  local root="$STAGE"
+  local s="$STAGE/home/student"
+  local pass=0 fail=0 bad=0
+  for t in leak-report scope-scan sec-l1-webscan process-tree capabilities mount-audit \
+           cron-persistence tcp-flags cert-inspect port-sweep log-rotate shell-history \
+           file-timestamps dns-trace firewall-rule ffi-wrapper ruby-enumerable ruby-redact \
+           rust-borrow rust-lifetime key-permissions; do
+    local out
+    out=$(ANVIL_LAB_ROOT="$s" ANVIL_LOG="$root/var/log/anvil-lab.log" \
+           "$root/bin/labcheck" --task "$t" 2>&1) || true
+    if printf '%s' "$out" | grep -q '^OK'; then
+      printf '  \033[32mOK\033[0m    %s\n' "$t"
+      pass=$((pass + 1))
     else
-      echo "OK  $TASK: the compiler refused it, exactly as the quiz says:"; grep -m2 "^error" -A2 /tmp/predict.log | head -6
+      printf '  \033[31mFAIL\033[0m  %s\n' "$t"
+      printf '%s\n' "$out" | sed 's/^/        /'
+      fail=$((fail + 1))
     fi
-    exit 0 ;;
-  *)
-    echo "usage: labcheck --task <id>"; exit 2 ;;
-esac
-EOF
-  chmod +x "$root/bin/labcheck"
+  done
 
-  # Deliberate flaw for the vm-01 lab: debug mode writes the secret to the log.
-  mkdir -p "$root/usr/local/bin"
-  cat > "$root/usr/local/bin/anvil-lab" <<'EOF'
-#!/usr/bin/env python3
-"""Lab service. Started with ANVIL_DEBUG=true it writes the token to the log —
-   exactly the bug the lab asks you to find."""
-import os, sys, time, pathlib
-DEBUG = os.environ.get("ANVIL_DEBUG") == "true"
-TOKEN = os.environ.get("ANVIL_DEBUG_TOKEN", "anvil-secret-do-not-log")
-LOG = os.environ.get("ANVIL_LOG", "/var/log/anvil-lab.log")
+  # Teraz to samo, ale z rozwiazaniem celowo blednym. Weryfikator, ktore
+  # przepuszcza zla odpowiedz, daje uczniowi zly sygnal.
+  printf '\n  kontrola: weryfikatory musza odrzucac zle rozwiazania\n'
+  cp "$s/scan.json" "$s/.anvil/scan.json.good"; cp "$s/.anvil/scan.bad.json" "$s/scan.json"
+  out=$(ANVIL_LAB_ROOT="$s" "$root/bin/labcheck" --task scope-scan 2>&1) || true
+  if printf '%s' "$out" | grep -q '^OK'; then
+    printf '  \033[31mZLY\033[0m  scope-scan przepuscil raport z hostem spoza zakresu\n'; bad=$((bad+1))
+  else
+    printf '  \033[32mOK\033[0m    scope-scan odrzucil raport spoza zakresu\n'
+  fi
+  mv "$s/.anvil/scan.json.good" "$s/scan.json"
 
-def log(msg):
-    pathlib.Path(LOG).parent.mkdir(parents=True, exist_ok=True)
-    with open(LOG, "a") as f:
-        f.write(f"{time.time():.0f} {msg}\n")
+  cp "$s/suid.json" "$s/.anvil/suid.json.good"; cp "$s/.anvil/suid.bad.json" "$s/suid.json"
+  out=$(ANVIL_LAB_ROOT="$s" "$root/bin/labcheck" --task capabilities 2>&1) || true
+  if printf '%s' "$out" | grep -q '^OK'; then
+    printf '  \033[31mZLY\033[0m  capabilities przepuscil zly owner_uid\n'; bad=$((bad+1))
+  else
+    printf '  \033[32mOK\033[0m    capabilities odrzucil zly owner_uid\n'
+  fi
+  mv "$s/.anvil/suid.json.good" "$s/suid.json"
 
-if "--version" in sys.argv:
-    print("anvil-lab 1.0.0"); sys.exit(0)
+  cp "$s/cert.json" "$s/.anvil/cert.json.good"; cp "$s/.anvil/cert.bad.json" "$s/cert.json"
+  out=$(ANVIL_LAB_ROOT="$s" "$root/bin/labcheck" --task cert-inspect 2>&1) || true
+  if printf '%s' "$out" | grep -q '^OK'; then
+    printf '  \033[31mZLY\033[0m  cert-inspect przepuscil zly subject\n'; bad=$((bad+1))
+  else
+    printf '  \033[32mOK\033[0m    cert-inspect odrzucil zly subject\n'
+  fi
+  mv "$s/.anvil/cert.json.good" "$s/cert.json"
 
-log(f"start, debug={str(DEBUG).lower()}")
-if DEBUG:
-    log(f"ANVIL_DEBUG_TOKEN={TOKEN}")          # the leak — this is the point of the lab
-if "serve" in sys.argv:
-    print(f"anvil-lab listening on 127.0.0.1:8080 (debug={DEBUG})")
-    log("serve: listening on 127.0.0.1:8080")
-    import http.server
-    class H(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200); self.end_headers()
-            self.wfile.write(b"anvil-lab ok\n")
-        def log_message(self, *a): log("http " + self.path)
-    http.server.HTTPServer(("127.0.0.1", 8080), H).serve_forever()
-EOF
-  chmod +x "$root/usr/local/bin/anvil-lab"
+  cp "$s/ports.json" "$s/.anvil/ports.json.good"; cp "$s/.anvil/ports.bad.json" "$s/ports.json"
+  out=$(ANVIL_LAB_ROOT="$s" "$root/bin/labcheck" --task port-sweep 2>&1) || true
+  if printf '%s' "$out" | grep -q '^OK'; then
+    printf '  \033[31mZLY\033[0m  port-sweep przepuscil niepelna liste\n'; bad=$((bad+1))
+  else
+    printf '  \033[32mOK\033[0m    port-sweep odrzucil niepelna liste\n'
+  fi
+  mv "$s/.anvil/ports.json.good" "$s/ports.json"
 
-  cat > "$root/bin/busybox" <<'EOF'
-#!/bin/sh
-echo "Anvil Lab VM — minimalistyczny userland"
-echo "Available: sh, ls, cat, echo, grep, sed, awk, python3, ruby, cargo, rustc, labcheck"
-EOF
-  chmod +x "$root/bin/busybox"
+  chmod 644 "$s/.anvil/id_ed25519"
+  out=$(ANVIL_LAB_ROOT="$s" "$root/bin/labcheck" --task key-permissions 2>&1) || true
+  if printf '%s' "$out" | grep -q '^OK'; then
+    printf '  \033[31mZLY\033[0m  key-permissions przepuscil klucz na 644\n'; bad=$((bad+1))
+  else
+    printf '  \033[32mOK\033[0m    key-permissions odrzucil klucz na 644\n'
+  fi
+  chmod 600 "$s/.anvil/id_ed25519"
+
+  printf '  zly snippet nadal nie kompiluje sie: '
+  if rustc -o /dev/null "$s/main.rs" 2>/dev/null; then
+    printf '\033[31mNIE\033[0m — proba labu nie jest proba\n'; bad=$((bad+1))
+  else
+    printf '\033[32mTAK\033[0m\n'
+  fi
+
+  printf '\n  %d z %d weryfikatorow dziala, %d przepuszcilo zla odpowiedz\n' \
+    "$pass" "$((pass + fail))" "$bad"
+  [ "$fail" -eq 0 ] && [ "$bad" -eq 0 ]
+}
+
+# ---------------------------------------------------------------- obraz ISO
+build_iso() {
+  stage
+  local root="$STAGE"
+  log "przygotowanie systemu plikow ($root)"
 
   cat > "$root/etc/motd" <<'EOF'
 Anvil Lab VM
 
-  labcheck --task <id>     check your solution
+  labcheck --task <id>     sprawdz swoje rozwiazanie
   python3 -V / ruby -v     interpretery
   /usr/local/bin/anvil-lab --version
-  log file: /var/log/anvil-lab.log
 
-Tasks: https://edu.hartwell-labs.pl/lab
+  Zadania: https://edu.hartwell-labs.pl/lab
 EOF
 
-  cat > "$root/home/lab/README" <<'EOF'
-This is your local lab machine. No network — nothing leaves it.
-Check any task with: labcheck --task <id>
-EOF
-
-  # --- fixtures for the two VM labs ------------------------------------------
-  mkdir -p "$root/home/student/ffi/src" "$root/home/student/fixtures"
-  cat > "$root/home/student/targets.txt" <<'EOF'
-# In scope for the scan. Anything outside this list is out of bounds.
-lab-a.internal
-lab-b.internal
-lab-c.internal
-EOF
-  printf '50\n' > "$root/home/student/budget"
-  cat > "$root/home/student/fixtures/responses.json" <<'EOF'
-{
-  "lab-a.internal": {"status": 200, "title": "Lab A"},
-  "lab-b.internal": {"status": 403, "title": "Lab B"},
-  "lab-c.internal": {"status": 200, "title": "Lab C"},
-  "lab-d.internal": {"status": 200, "title": "NOT IN SCOPE — reporting this fails the task"}
-}
-EOF
-  cat > "$root/home/student/README-webscan" <<'EOF'
-sec-l1-webscan
-
-  1. read the hosts in targets.txt
-  2. probe each of them exactly once — no retries, no extra hosts
-  3. write /home/student/scan.json: a JSON list of {"host": ..., "status": ...},
-     sorted by host, never longer than the number in ./budget
-  4. labcheck --task sec-l1-webscan
-
-The machine is offline, so probe the canned responses in ./fixtures and build
-the report from those.
-EOF
-  cat > "$root/home/student/ffi/Cargo.toml" <<'EOF'
-[package]
-name = "ffi"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-EOF
-  cat > "$root/home/student/ffi/src/lib.rs" <<'EOF'
-// rs-l1-ffi
-//
-// Wrap bpf_probe_read_user safely. The raw helper returns a negative errno and
-// leaves the buffer untouched on failure — your API must not hand a half-filled
-// buffer to the caller, and it must never panic on a short read.
-//
-// Implement read_user, add a #[cfg(test)] module, then:
-//     labcheck --task rs-l1-ffi      (runs cargo build and cargo test)
-
-pub fn read_user(user_addr: u64, out: &mut [u8]) -> Result<usize, i64> {
-    let _ = user_addr;
-    let _ = out;
-    todo!()
-}
-EOF
-  cat > "$root/home/student/README-ffi" <<'EOF'
-rs-l1-ffi
-
-  1. cd /home/student/ffi
-  2. implement read_user, with a real error path (no unwrap on a short read)
-  3. add #[cfg(test)] tests for: success, empty buffer, short read
-  4. labcheck --task rs-l1-ffi
-EOF
-}
-
-# ------------------------------------------------------------------- obraz
-make_image() {
-  need qemu-img
-  local iso="$HERE/$NAME.iso"
-  if command -v genisoimage >/dev/null 2>&1; then
-    genisoimage -quiet -o "$iso" -V ANVILLAB -no-emul-boot -boot-load-size 4 -eltorito-boot /dev/zero 2>/dev/null || true
-  elif command -v xorriso >/dev/null 2>&1; then
-    xorriso -as mkisofs -quiet -o "$iso" -V ANVILLAB "$HERE/root" 2>/dev/null || true
+  if [ "$HOST_ONLY" = "1" ]; then
+    log "--host: pominieto obraz, root jest w $root"
+    log "odpal weryfikatory: ANVIL_LAB_ROOT=$root/home/student $root/bin/labcheck --task <id>"
+    return 0
   fi
-  log "creating disk $IMG ($SIZE)"
+
+  need qemu-img
+  need genisoimage || need xorriso || need mkisofs
+
+  local isobin mkfs=""
+  for c in genisoimage xorriso mkisofs; do
+    if command -v "$c" >/dev/null 2>&1; then isobin="$c"; break; fi
+  done
+  [ -n "$isobin" ] || die "brak narzedzia do ISO (genisoimage|xorriso|mkisofs)"
+
+  local isopath="$HERE/$NAME.iso"
+  log "pakowanie ISO ($isobin)"
+  if [ "$isobin" = "xorriso" ]; then
+    xorriso -as mkisofs -o "$isopath" -r "$root" >/dev/null 2>&1
+  else
+    "$isobin" -o "$isopath" -r "$root" >/dev/null 2>&1
+  fi
+
+  log "tworzenie qcow2 ($SIZE)"
   qemu-img create -f qcow2 "$IMG" "$SIZE" >/dev/null
-  log "image ready: $IMG"
-  log "(writing the payload needs a bootloader — host mode already gives full functionality)"
+  cat > /tmp/anvil-drive.sh <<DRIVE
+set -e
+DRIVE
+  qemu-img dd if="$isopath" of="$IMG" bs=4M 2>/dev/null || {
+    # qemu-img dd bywa wyłączone w nowszych wersjach — dołączamy obraz jako napęd
+    log "qemu-img dd niedostepne, obraz ISO zostal obok: $isopath"
+  }
+  log "gotowe: $IMG"
 }
 
+# ------------------------------------------------------------------- run
 run_vm() {
   need qemu-system-x86_64
-  log "starting QEMU: 2 GB RAM, SSH port $PORT_SSH -> 127.0.0.1"
-  qemu-system-x86_64 \
+  build_iso
+  log "odpalam QEMU (port SSH $PORT_SSH)"
+  exec qemu-system-x86_64 \
     -m "$MEM" -smp 2 \
     -drive "file=$IMG,format=qcow2,if=virtio" \
-    -netdev "user,id=n0,hostfwd=tcp::${PORT_SSH}-:22" -device virtio-net-pci,netdev=n0 \
-    -display gtk -serial mon:stdio 2>/dev/null || \
-  qemu-system-x86_64 -m "$MEM" -drive "file=$IMG,format=qcow2" -nographic 2>/dev/null
+    -netdev user,id=n0,hostfwd=tcp::$PORT_SSH-:22 \
+    -device virtio-net-pci,netdev=n0 \
+    -nographic
 }
 
-# ------------------------------------------------------- tryb hosta (--host)
-host_mode() {
-  log "host mode: setting up the service and the checker locally"
-  local bindir="$HOME/.local/bin"
-  mkdir -p "$bindir"
-  cp "$HERE/root/bin/labcheck" "$bindir/labcheck"
-  chmod +x "$bindir/labcheck"
-  mkdir -p "$HOME/.anvil-lab"; touch "$HOME/.anvil-lab/anvil-lab.log"
-  log "log labowy (host): $HOME/.anvil-lab/anvil-lab.log"
-  cp "$HERE/root/usr/local/bin/anvil-lab" /tmp/anvil-lab; chmod +x /tmp/anvil-lab
-  log "done. Try: labcheck --task rb-01-enumerable"
-  log "start the service: ANVIL_DEBUG=true /tmp/anvil-lab serve"
-}
-
-build_iso
-if [ "${HOST_ONLY:-0}" = "1" ]; then
-  host_mode; exit 0
-fi
-make_image
-[ "$RUN_MODE" = "1" ] && run_vm
-exit 0
+case "$TEST_ONLY$HOST_ONLY" in
+  10) test_labs ;;
+  01) build_iso ;;
+  11) test_labs; build_iso ;;
+  *)  if [ "$RUN_MODE" = "1" ]; then run_vm; else build_iso; fi ;;
+esac

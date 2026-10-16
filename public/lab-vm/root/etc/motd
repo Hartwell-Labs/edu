@@ -1,0 +1,8 @@
+Anvil Lab VM
+
+  labcheck --task <id>     check your solution
+  python3 -V / ruby -v     interpretery
+  /usr/local/bin/anvil-lab --version
+  log file: /var/log/anvil-lab.log
+
+Tasks: https://edu.hartwell-labs.pl/lab

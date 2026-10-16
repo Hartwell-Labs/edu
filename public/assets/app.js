@@ -19,7 +19,8 @@
   var KEY = "anvil:";
   var TRACK_LABELS = { security: "Cybersecurity", python: "Python", ruby: "Ruby", rust: "Rust" };
 
-  var S = { tasks: [], byId: {}, cur: null, progress: {}, user: null, streak: 0, pyodide: null };
+  var S = { tasks: [], byId: {}, cur: null, progress: {}, user: null, streak: 0,
+          pyodide: null, query: "", track: null, executor: null };
   var $ = function (id, root) { return (root || document).querySelector("#" + id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
 
@@ -101,7 +102,7 @@
       var plan = S.user.plan && S.user.plan !== "free"
         ? '<span class="streak" title="Lifetime access">' + esc(S.user.plan) + "</span>"
         : (S.user.email_verified ? "" : '<span class="warndot" title="E-mail not confirmed">!</span>');
-      el.innerHTML = '<a class="chip" href="/lab" title="Your progress"><span class="dot"></span>' +
+      el.innerHTML = '<a class="chip" href="/panel" title="Your progress"><span class="dot"></span>' +
         "<b>" + esc(S.user.handle) + "</b>" +
         (S.streak ? '<span class="streak">' + S.streak + "d 🔥</span>" : "") + plan + "</a>" +
         '<button class="btn btn-ghost btn-sm" id="logout">Sign out</button>';
@@ -215,6 +216,7 @@
     localStorage.setItem(KEY + "progress:" + (S.user ? S.user.handle : "guest"), JSON.stringify(S.progress));
   }
   function trackParam() { return new URLSearchParams(location.search).get("track"); }
+  S.track = new URLSearchParams(location.search).get("track") || null;
 
   /** Pierwsze nierozwiązane zadanie — dokąd podpowiedzieć po zalogowaniu. */
   function nextTask() {
@@ -266,30 +268,92 @@
     return Math.max(10, (t.points || 100) - (st.hints || 0) * 25);
   }
 
+  /**
+   * 300+ lekcji na plaskiej liscie to sciezka, ktorej nikt nie czyta.
+   * Grupujemy po obszarze, a nad liscie stoi wyszukiwarka — obie rzeczy
+   * sa konieczne, gdy katalog rozszerza sie o ciezkie laby VM.
+   */
+  function filterTasks() {
+    var q = (S.query || "").trim().toLowerCase();
+    var out = S.tasks;
+    if (S.track) out = out.filter(function (t) { return t.track === S.track; });
+    if (S.executor) out = out.filter(function (t) { return t.executor === S.executor; });
+    if (q) {
+      out = out.filter(function (t) {
+        return (t.title + " " + (t.area || "") + " " + t.track + " " + t.id).toLowerCase().indexOf(q) !== -1;
+      });
+    }
+    return out;
+  }
+
+  function renderFilter() {
+    var el = $("filters");
+    if (!el) return;
+    var counts = {};
+    S.tasks.forEach(function (t) { counts[t.executor] = (counts[t.executor] || 0) + 1; });
+    var execs = [["pyodide", "in the browser"], ["vm", "lab machine"], ["quiz", "quiz"]]
+      .filter(function (e) { return counts[e[0]]; });
+    el.innerHTML =
+      '<input id="q" type="search" placeholder="Search ' + S.tasks.length + ' labs…" value="'
+      + esc(S.query || "") + '" aria-label="Search labs" />'
+      + '<div class="chips">'
+      + '<button class="chipbtn' + (!S.executor ? " on" : "") + '" data-ex="">all · ' + S.tasks.length + "</button>"
+      + execs.map(function (e) {
+        return '<button class="chipbtn' + (S.executor === e[0] ? " on" : "") + '" data-ex="' + e[0]
+          + '">' + e[1] + " · " + counts[e[0]] + "</button>";
+      }).join("")
+      + "</div>";
+    $("q").addEventListener("input", function () {
+      S.query = this.value;
+      renderSide(trackParam());
+    });
+    el.querySelectorAll("[data-ex]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        S.executor = b.getAttribute("data-ex") || null;
+        renderSide(trackParam());
+      });
+    });
+  }
+
   function renderSide(filter) {
     var el = $("side");
     if (!el) return;
+    renderFilter();
+    var list = filterTasks();
     var by = {};
-    S.tasks.forEach(function (t) { (by[t.track] = by[t.track] || []).push(t); });
+    list.forEach(function (t) { (by[t.track] = by[t.track] || []).push(t); });
     var html = "";
     Object.keys(by).forEach(function (k) {
       if (filter && k !== filter) return;
-      var list = by[k];
-      var open = list.filter(function (t) { return unlocked(t); });
+      var items = by[k];
+      var open = items.filter(function (t) { return unlocked(t); });
       var done = open.filter(function (t) { return (S.progress[t.id] || {}).passed; }).length;
-      var tail = open.length < list.length ? ' <span class="side-paid">+' + (list.length - open.length) + " paid</span>" : "";
+      var tail = open.length < items.length ? ' <span class="side-paid">+' + (items.length - open.length) + " paid</span>" : "";
       html += "<h3>" + (TRACK_LABELS[k] || k) + ' <span class="side-count">' + done + "/" + open.length + "</span>" + tail + "</h3>";
-      list.forEach(function (t) {
-        var st = S.progress[t.id] || {};
-        var openTask = unlocked(t);
-        var cls = "task" + (S.cur && S.cur.id === t.id ? " active" : "") + (st.passed ? " done" : "") +
-          (st.hints ? " hinted" : "") + (openTask ? "" : " veiled");
-        html += '<button class="' + cls + '" data-id="' + t.id + '"' + (openTask ? "" : ' data-veiled="1"') + ">" +
-          '<span class="mark">' + (st.passed ? "✓" : st.hints ? "!" : "") + "</span>" +
-          "<span>" + esc(t.title) + "</span>" +
-          (openTask ? "" : '<span class="lock">🔒</span>') + "</button>";
+
+      // Wewnatrz sciezki grupujemy po obszarze — tam lezy tresc lekcji.
+      var areas = {};
+      items.forEach(function (t) { (areas[t.area || "Other"] = areas[t.area || "Other"] || []).push(t); });
+      Object.keys(areas).forEach(function (a) {
+        html += '<div class="side-area">' + esc(a) + "</div>";
+        areas[a].forEach(function (t) {
+          var st = S.progress[t.id] || {};
+          var openTask = unlocked(t);
+          var cls = "task" + (S.cur && S.cur.id === t.id ? " active" : "") + (st.passed ? " done" : "")
+            + (st.hints ? " hinted" : "") + (openTask ? "" : " veiled");
+          html += '<button class="' + cls + '" data-id="' + t.id + '"' + (openTask ? "" : ' data-veiled="1"') + ">"
+            + '<span class="mark">' + (st.passed ? "✓" : st.hints ? "!" : "") + "</span>"
+            + "<span>" + esc(t.title) + "</span>"
+            + (openTask ? "" : '<span class="lock">🔒</span>') + "</button>";
+        });
       });
     });
+    if (!list.length) {
+      html = '<p class="side-empty">Nothing matches “' + esc(S.query || "") + '”.</p>';
+    }
+    if (html.indexOf("<h3>") === -1 && !html) {
+      html = '<p class="side-empty">Nothing matches “' + esc(S.query || "") + '”.</p>';
+    }
     el.innerHTML = html;
     el.querySelectorAll(".task").forEach(function (b) {
       b.addEventListener("click", function () { open(b.getAttribute("data-id")); });

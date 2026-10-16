@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+"""Oryginalny binary uslugi. /etc/cron.d/anvil-restore wraca go co godzine,
+bo /usr/local/bin/anvil-lab ktos usunal — to mechanizm utrzymywania sie,
+ktory masz zglosic."""
+print("anvil-lab 1.0.0 (build 2026-10-02)")

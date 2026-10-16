@@ -1,0 +1,13 @@
+[Unit]
+Description=Anvil lab service
+After=network.target
+
+[Service]
+Type=simple
+User=anvil
+ExecStart=/usr/bin/python3 /usr/local/bin/anvil-lab serve
+Restart=on-failure
+Environment=ANVIL_LOG=/var/log/anvil-lab.log
+
+[Install]
+WantedBy=multi-user.target

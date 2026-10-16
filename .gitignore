@@ -1,5 +1,14 @@
 node_modules/
 .wrangler/
-public/lab-vm/root/
 public/lab-vm/*.qcow2
 public/lab-vm/*.iso
+
+# UWAGA: public/lab-vm/root/ jest ZAPISYWANY do repo. To jest filesystem
+# maszyny labowej — fixture'y, usluga, labcheck i klucz odpowiedzi. build.sh
+# niczego tam nie generuje, wiec bez tego katalogu zestaw labow nie da sie
+# odtworzyc z samego repo.
+#
+# Git trzyma tylko bit "wykonywalny", nie setuid ani tryb katalogu, dlatego
+# build.sh nadaje je w stage() przy kazdym budowaniu. Pliki, ktore wygladaja
+# jak sekrety (id_ed25519, lab.key), sa celowo uszkodzone i mialy byc
+# jednorazowe — nikt z nich nie otwiera niczego.

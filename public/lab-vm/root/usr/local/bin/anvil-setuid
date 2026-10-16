@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Naiwny wrapper zalogowanego roota — setuid bez rozecia argumentow.
+
+Nie jest to podatnosc: to przyklad. setuid zmienia efektywne uprawnienia
+procesu na wlasciciela pliku, wiec ten skrypt uruchamia sie jako uid 0
+niezaleznie od tego, kto go wywolal.
+"""
+import os, sys
+print(f"uid={os.getuid()} euid={os.geteuid()}")
+if len(sys.argv) > 1 and sys.argv[1] == "report":
+    print("anvil privileged report")

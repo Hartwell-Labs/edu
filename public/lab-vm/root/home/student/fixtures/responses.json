@@ -1,0 +1,6 @@
+{
+  "lab-a.internal": {"status": 200, "title": "Lab A"},
+  "lab-b.internal": {"status": 403, "title": "Lab B"},
+  "lab-c.internal": {"status": 200, "title": "Lab C"},
+  "lab-d.internal": {"status": 200, "title": "NOT IN SCOPE - reporting this fails the task"}
+}

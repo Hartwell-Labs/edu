@@ -3,16 +3,38 @@
 > Hartwell Labs' interactive platform: cybersecurity, Python, Ruby and Rust. Write code,
 > > it runs in your browser (Python through WebAssembly), and the checker tells you which
 > > test failed. Labs that need a real machine run in a downloadable lab VM.
-Generated 2026-10-16. Machine-readable task manifest: https://edu.hartwell-labs.pl/api/manifest
+Generated 2026-10-16. Catalogue: https://edu.hartwell-labs.pl/api/catalog  ·  Full manifest: https://edu.hartwell-labs.pl/api/manifest
+Progress for a signed-in account: https://edu.hartwell-labs.pl/panel
+
+## Catalogue contents
+
+307 labs in 80 areas, 47230 points in total.
+
+| Executor | Count | Runs |
+|---|---|---|
+| `pyodide` | 186 | in the browser (Python in WebAssembly) |
+| `quiz` | 96 | in the browser |
+| `vm` | 25 | on the lab VM, checked by `labcheck` |
+
+| Track | Count |
+|---|---|
+| `python` | 122 |
+| `security` | 113 |
+| `rust` | 45 |
+| `ruby` | 27 |
+
+The published manifest never contains reference solutions: `/api/manifest` strips the
+`solution` field, and `check-tasks.py` verifies every lab locally against its own
+solution. A lab whose checks do not pass on its own reference solution does not ship.
 
 ## Access model
 
 - **An account is required** to open any lab (`POST /api/auth/register`: nickname,
   e-mail, client-side password verifier). One confirmation e-mail is sent;
   `GET /api/auth/verify?token=…` confirms the address.
-- **The first ten labs are free** with that account and stay free.
-- **The second tier (`plan = "lifetime"`) opens the remaining six labs** — the full
-  paths: sliding-window rate limiting, a scanner built to a spec, a safe eBPF FFI
+- **The first 10 labs are free** with that account and stay free.
+- **The second tier (`plan = "lifetime"`) opens the remaining 297 labs** — the
+  full paths: sliding-window rate limiting, a scanner built to a spec, a safe eBPF FFI
   wrapper, borrow-checker depth, and the service you have to run yourself. No price
   list: quoted per conversation, lifetime (one payment, not a subscription).
 - Sessions: 32 random bytes in an HttpOnly, SameSite=Lax cookie, 60-day expiry.

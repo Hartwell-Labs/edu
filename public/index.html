@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Anvil — learn by running the code</title>
-<meta name="description" content="Interactive labs: write code, run it in your browser, see which test failed and why. Cybersecurity, Python, Ruby, Rust. First ten labs free with an account." />
+<title>Anvil — interactive labs in cybersecurity, Python, Ruby and Rust</title>
+<meta name="description" content="Write code, run it in your browser, and see which check failed and why. Over three hundred labs; the first ten are free with an account." />
 <link rel="canonical" href="https://edu.hartwell-labs.pl/" />
-<meta name="theme-color" content="#fdfcfb" />
-<meta property="og:title" content="Anvil — learn by running the code" />
-<meta property="og:description" content="Write code, run it, learn from failures. First ten labs free." />
+<meta name="theme-color" content="#fbfaf9" />
+<meta property="og:title" content="Anvil — interactive labs" />
+<meta property="og:description" content="Write code, run it, and see what did not work. First ten labs free with an account." />
 <meta property="og:type" content="website" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
 <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
 <link rel="stylesheet" href="/assets/app.css" />
 </head>
@@ -22,8 +22,8 @@
     <a class="brand" href="/"><span class="brand-mark">A</span><b>Anvil</b><span>interactive labs</span></a>
     <nav class="main">
       <a href="#tracks">Tracks</a>
-      <a href="#how">How it works</a>
-      <a href="#vm">Lab machine</a>
+      <a href="#access">Access</a>
+      <a href="/panel">Your progress</a>
     </nav>
     <div class="who" id="who"></div>
   </div>
@@ -32,92 +32,109 @@
 <div id="banner-slot"></div>
 
 <div class="container hero">
-  <span class="kicker">● First ten labs free with an account · the full paths are the paid tier</span>
-  <h1>Write code. <em>Run it.</em> See what did not work.</h1>
+  <span class="kicker" id="kicker">Interactive labs</span>
+  <h1>Write the code. <em>Run it.</em> Read the failure.</h1>
   <p class="lede">
-    Anvil is a set of labs where you actually run something. Python runs in your
-    browser (WebAssembly — nothing is sent to a server), and the checker tells you
-    <b>which test passed, which failed, and why</b> instead of “wrong answer”.
-    Sixteen labs across cybersecurity, Python, Ruby and Rust. The first ten are
-    free with a free account; the deeper paths live in the paid tier.
+    Anvil is a set of labs where you run something instead of guessing. Python compiles to
+    WebAssembly and runs in your browser — your code and the checks never touch our servers.
+    When a check fails you get the assertion, the value you produced and the line where they
+    disagree. <b id="n-total">Three hundred</b> labs across cybersecurity, Python, Ruby and
+    Rust; the first ten are free with an account.
   </p>
   <div class="hero-actions">
-    <a class="btn btn-primary" href="/lab">Start the first lab →</a>
-    <a class="btn btn-ghost" href="#tracks">See the tracks</a>
+    <a class="btn btn-primary" href="/lab">Open the labs</a>
+    <a class="btn btn-ghost" href="#access">What the second tier opens</a>
   </div>
 
   <div class="tracks" id="tracks">
     <a class="track" href="/lab?track=python">
-      <div class="ic">🐍</div><h3>Python in your browser</h3>
-      <p>Real Python in WebAssembly: log parsing, checksums, layered encoding, JWT decoding, SQL-injection detection, sliding-window rate limiting.</p>
-      <div class="tier">7 labs · 5 free · nothing to install</div>
+      <h3>Python</h3>
+      <p>Log parsing, checksums, layered encoding, JWT claims, SQL-injection detection, sliding-window rate limiting — real Python, compiled to WebAssembly.</p>
+      <div class="tier" data-tier="python">—</div>
     </a>
     <a class="track" href="/lab?track=security">
-      <div class="ic">🛡️</div><h3>Cybersecurity</h3>
-      <p>Name the technique in a WAF log, detect an injection, count who is hammering the service, redact a card number, run a service that leaks its own secret.</p>
-      <div class="tier">6 labs · 3 free · 3 on the lab VM</div>
+      <h3>Cybersecurity</h3>
+      <p>Name the technique in a WAF log, detect an injection, find the leak in a service you started yourself, redact a card number before it reaches a log.</p>
+      <div class="tier" data-tier="security">—</div>
     </a>
     <a class="track" href="/lab?track=rust">
-      <div class="ic">🦀</div><h3>Rust</h3>
-      <p>Ownership, <code>move</code>, and the borrow checker — with the compiler's real messages. Executable Rust in the lab machine, plus a safe eBPF wrapper to build.</p>
-      <div class="tier">4 labs · 1 free · quiz + VM</div>
+      <h3>Rust</h3>
+      <p>Ownership, <code>move</code> and the borrow checker with the compiler's own wording. Executable Rust on the lab machine, plus a safe eBPF wrapper to build.</p>
+      <div class="tier" data-tier="rust">—</div>
     </a>
     <a class="track" href="/lab?track=ruby">
-      <div class="ic">💎</div><h3>Ruby</h3>
-      <p><code>Enumerable</code> instead of a loop, <code>gsub</code> with a block, masking card numbers in logs — on a real interpreter in the lab machine.</p>
-      <div class="tier">2 labs · free · lab machine</div>
+      <h3>Ruby</h3>
+      <p><code>Enumerable</code> instead of a loop, <code>gsub</code> with a block, masking card numbers — on a real interpreter on the lab machine.</p>
+      <div class="tier" data-tier="ruby">—</div>
     </a>
   </div>
 </div>
 
-<div class="container" id="how" style="margin-top:52px">
-  <span class="kicker">Three rules</span>
+<div class="container" id="how" style="margin-top:64px">
+  <span class="kicker">How a lab works</span>
   <div class="how">
-    <div class="card"><div class="num">01</div><h3>Nothing leaves your browser</h3>
-      <p>Your code and the tests run on your machine. Only a nickname, your progress and which tasks you solved travel to the server.</p></div>
-    <div class="card"><div class="num">02</div><h3>A failure is the lesson</h3>
-      <p>You get the assertion, the expected value, the value you got and the line where they disagree. Hints are one at a time and cost points — try on your own first.</p></div>
-    <div class="card"><div class="num">03</div><h3>Hard labs get a real machine</h3>
-      <p>Need a kernel, a network or a compiler? Download the lab machine image, run it locally, and verify offline with <code>labcheck</code>.</p></div>
+    <div class="card"><span class="num">01</span><h3>Everything runs on your machine</h3>
+      <p>Code and checks run in your browser. Only a nickname, your progress and which labs you solved travel to the server.</p></div>
+    <div class="card"><span class="num">02</span><h3>The failure is the lesson</h3>
+      <p>You get the assertion, the expected value, the value you produced and the line where they disagree. Hints come one at a time and cost points.</p></div>
+    <div class="card"><span class="num">03</span><h3>Hard labs get a real machine</h3>
+      <p>When a lab needs a kernel, a network or a compiler, you get an image you build or download, and <code>labcheck</code> verifies it with no network involved.</p></div>
   </div>
 </div>
 
-<div class="container" id="vm" style="margin-top:52px">
+<div class="container" id="vm" style="margin-top:64px">
   <span class="kicker">Lab machine</span>
-  <h1 style="font-size:30px;margin:10px 0 12px">Some labs need Linux, not a browser tab</h1>
-  <p class="lede" style="margin-top:0">
-    Exploits, forensics, eBPF — none of that can be simulated in a tab.
-    The lab machine is a plain image you build or download, run locally, and
-    <code>labcheck</code> verifies your solution with no internet involved.
+  <h2 style="font-size:20px;margin-bottom:10px">Some labs need Linux, not a browser tab</h2>
+  <p class="lede" style="margin:0 0 18px">
+    Exploits, forensics, eBPF. The lab machine is a plain image you build or download, run
+    locally, and verify offline with <code>labcheck</code>. Every checker runs on the correct
+    answer and on a deliberately wrong one — a checker that accepts a bad answer is a bug we
+    test for.
   </p>
-  <div class="cmd"><code>bash lab-vm/build.sh --host   # no QEMU: verifies everything locally</code><button class="copy" data-code="bash lab-vm/build.sh --host">COPY</button></div>
-  <div class="cmd"><code>bash lab-vm/build.sh --run   # full image in QEMU</code><button class="copy" data-code="bash lab-vm/build.sh --run">COPY</button></div>
+  <div class="cmd"><code>bash lab-vm/build.sh --test   # runs every lab checker locally</code><button class="copy" data-code="bash lab-vm/build.sh --test">COPY</button></div>
+  <div class="cmd"><code>bash lab-vm/build.sh --run   # full image under QEMU</code><button class="copy" data-code="bash lab-vm/build.sh --run">COPY</button></div>
   <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap">
     <a class="btn btn-ghost btn-sm" href="/lab-vm/README.md">Lab machine README</a>
     <a class="btn btn-ghost btn-sm" href="/lab-vm/build.sh">build.sh</a>
   </div>
 </div>
 
-<div class="container" style="margin-top:56px">
-  <div class="locked" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
-    <div style="flex:1 1 320px">
-      <h3>The paid tier: full paths, lifetime, no subscription</h3>
-      <p>The first ten labs are free and stay free. The second tier opens the six labs that go
-      past them — sliding-window rate limiting that has to survive a real network, a scanner
-      that stays inside its scope and its request budget, a safe <code>bpf_probe_read_user</code>
-      wrapper, and a service you have to run yourself to see the leak. Lifetime means once, not
-      monthly. Beyond that we also write labs for a team, run private groups, and build a lab
-      machine around your stack. No price list — the scope decides the number, so we quote it in
-      a conversation.</p>
+<div class="container" id="access" style="margin-top:64px">
+  <span class="kicker">Access</span>
+  <h2 style="font-size:20px;margin-bottom:16px">Two tiers, and the first one is not a trial</h2>
+  <div class="tiers">
+    <div class="tiercard">
+      <span class="tag">Free account</span>
+      <div class="price">First <span id="n-free">ten</span> labs <small>· stays free forever</small></div>
+      <ul>
+        <li>A nickname, an e-mail, a password. One confirmation mail.</li>
+        <li>Your progress follows you between devices.</li>
+        <li>Real Python in the browser, quizzes, and the first machine labs.</li>
+      </ul>
+      <div style="margin-top:22px"><a class="btn btn-ghost" href="/lab">Create an account</a></div>
     </div>
-    <a class="btn btn-primary" href="mailto:contact@hartwell-labs.pl?subject=Anvil%20labs">Let's talk</a>
+    <div class="tiercard">
+      <span class="tag">Second tier · lifetime</span>
+      <div class="price">The other <span id="n-paid">labs</span> <small>· one payment, not a subscription</small></div>
+      <ul>
+        <li>Every path in full — no drip, no weekly unlocks.</li>
+        <li>The sliding-window rate limiter, the scanner built to a written spec, the safe <code>bpf_probe_read_user</code> wrapper.</li>
+        <li>All <span id="n-vm">—</span> lab-machine labs and every lab added afterwards.</li>
+        <li>Private groups and labs written for your own stack, quoted per scope.</li>
+      </ul>
+      <div style="margin-top:22px"><button class="btn btn-primary" id="ask">Request access</button></div>
+    </div>
   </div>
+  <p class="vnote" style="margin-top:14px">
+    No price list: the number depends on scope, so we quote it in a conversation. Requesting
+    access writes to our database and gets a reply from a person, not a checkout session.
+  </p>
 </div>
 
 <footer><div class="container f-grid">
   <div>
-    <div class="brand" style="margin-bottom:12px"><span class="brand-mark">A</span><b>Anvil</b></div>
-    <p style="color:var(--ink-3);font-size:14px;max-width:40ch">Interactive labs by Hartwell Labs — Szczecin, Poland. Students' code stays on their machine.</p>
+    <div class="brand" style="margin-bottom:10px"><span class="brand-mark">A</span><b>Anvil</b></div>
+    <p>Interactive labs by Hartwell Labs — Szczecin, Poland. Student code stays on the student's machine.</p>
   </div>
   <div><h5>Tracks</h5>
     <a href="/lab?track=python">Python</a>
@@ -125,23 +142,59 @@
     <a href="/lab?track=rust">Rust</a>
     <a href="/lab?track=ruby">Ruby</a>
   </div>
-  <div><h5>Tools</h5>
+  <div><h5>Product</h5>
+    <a href="/lab">Labs</a>
+    <a href="/panel">Your progress</a>
     <a href="/lab-vm/README.md">Lab machine</a>
-    <a href="/api/manifest">Tasks (JSON)</a>
-    <a href="/llms.txt">llms.txt</a>
+    <a href="/access">Request access</a>
   </div>
-  <div><h5>Company</h5>
+  <div><h5>For tools</h5>
+    <a href="/api/catalog">Catalogue (JSON)</a>
+    <a href="/llms.txt">llms.txt</a>
     <a href="https://hartwell-labs.pl/">hartwell-labs.pl</a>
     <a href="https://wiki.hartwell-labs.pl/">Documentation</a>
-    <a href="https://github.com/Hartwell-Labs/edu">Source code</a>
   </div>
 </div>
 <div class="container f-fine">
-  <span>© 2026 Hartwell Labs · labs under MIT, unless a task says otherwise</span>
+  <span>© 2026 Hartwell Labs · labs under MIT unless a task says otherwise</span>
   <span>Szczecin, Poland</span>
 </div>
 </footer>
 
+<script src="/assets/access.js" defer></script>
 <script src="/assets/app.js" defer></script>
+<script>
+  /* Liczby pochodza z katalogu, nie z tekstu — inaczej liczba lekcji
+     rozjezdza sie z prawda przy kazdej zmianie generatora. */
+  fetch("/api/catalog").then(function (r) { return r.json(); }).then(function (d) {
+    var t = d.tasks || [], by = {}, free = 0, vm = 0;
+    t.forEach(function (x) {
+      var b = by[x.track] = by[x.track] || { total: 0, free: 0, vm: 0 };
+      b.total++;
+      if (x.free) { b.free++; free++; }
+      if (x.executor === "vm") { b.vm++; vm++; }
+    });
+    document.querySelectorAll("[data-tier]").forEach(function (el) {
+      var b = by[el.getAttribute("data-tier")];
+      if (!b) return;
+      el.textContent = b.total + " labs · " + b.free + " free"
+        + (b.vm ? " · " + b.vm + " on the lab VM" : "");
+    });
+    var set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+    set("n-total", t.length);
+    set("n-free", free);
+    set("n-paid", t.length - free);
+    set("n-vm", vm);
+    set("kicker", t.length + " labs · first " + free + " free with an account");
+  }).catch(function () { /* strona ma dzialac takze bez tego */ });
+</script>
+<script>
+  document.addEventListener("click", function (e) {
+    if (e.target.id === "ask") {
+      e.preventDefault();
+      openAccessDialog();
+    }
+  });
+</script>
 </body>
 </html>

@@ -9,6 +9,8 @@ admin.py — zarządzanie kontami Anvil (Cloudflare D1).
   python3 admin.py verify Kija            # ręczne potwierdzenie e-mail
   python3 admin.py sendverify Kija        # wyślij link potwierdzający ponownie
   python3 admin.py progress Kija          # co rozwiązał
+  python3 admin.py requests               # prośby o drugi tier
+  python3 admin.py grantreq 3             # nadaj lifetime z prośby nr 3
 
 Wymaga tokenu Cloudflare w ~/.config/hartwell/cf_bot_token.txt (CLOUDFLARE_API_TOKEN)
 albo w środowisku. Konto zakładane z poziomu admina jest od razu zweryfikowane —
@@ -87,6 +89,11 @@ def main():
     pr = sub.add_parser("progress")
     pr.add_argument("handle")
 
+    sub.add_parser("requests")
+
+    gr = sub.add_parser("grantreq", help="nadaj lifetime z prośby o dostęp")
+    gr.add_argument("id", type=int, help="numer prośby z `admin.py requests`")
+
     args = ap.parse_args()
 
     if args.cmd == "list":
@@ -158,7 +165,42 @@ def main():
             mark = "✓" if r["passed"] else "·"
             print(f"    {mark} {r['task_id']:24} {r['points'] or 0:>4} pkt  "
                   f"próby={r['attempts']} podpowiedzi={r['hints_used']}")
+        return
 
+    if args.cmd == "requests":
+        rows = sql("SELECT id, handle, email, status, created_at, why FROM access_requests "
+                   "ORDER BY created_at DESC LIMIT 40")
+        if not rows:
+            print("  brak próśb"); return
+        print(f"  {len(rows)} próśb o drugi tier (pokazuję 40 najnowszych):")
+        for r in rows:
+            age = time.time() - r["created_at"] / 1000
+            when = f"{age/86400:.1f} d" if age > 86400 else f"{age/3600:.1f} h"
+            why = (r["why"] or "").replace("\n", " ")[:56]
+            print(f"    #{r['id']:<4} {r['status']:8} {r['email']:32} "
+                  f"{(r['handle'] or '-'):14} {when:>7}  {why}")
+        print("\n  nadaj plan:  python3 admin.py grantreq <id>")
+        return
+
+    if args.cmd == "grantreq":
+        rows = sql(f"SELECT id, email, handle, user_id, status FROM access_requests WHERE id = {args.id}")
+        if not rows:
+            print(f"  brak prośby nr {args.id}"); return
+        r = rows[0]
+        if r["status"] == "granted":
+            print(f"  prośba #{r['id']} już obsłużona"); return
+        if not r["user_id"]:
+            print(f"  prośba #{r['id']} ({r['email']}) nie jest powiązana z kontem.")
+            print(f"  załóż konto na ten e-mail:  python3 admin.py create <nick> "
+                  f"--email {r['email']} --password '...' --plan lifetime")
+            return
+        user = sql(f"SELECT handle FROM users WHERE id = '{escape(r['user_id'])}'")[0]
+        print(f"  prośba #{r['id']} od {r['email']} → nadaję lifetime dla {user['handle']}")
+        sql(f"UPDATE users SET plan = 'lifetime' WHERE id = '{escape(r['user_id'])}'")
+        sql(f"UPDATE access_requests SET status = 'granted', handled_at = "
+            f"{int(time.time() * 1000)} WHERE id = {int(r['id'])}")
+        print("  gotowe. Prośba zamknięta.")
+        return
 
 if __name__ == "__main__":
     main()

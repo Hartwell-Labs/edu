@@ -1,0 +1,3 @@
+# Anvil restores its state directory on the hour - a persistence
+# mechanism you are meant to notice, then report.
+17 * * * * root install -m 0755 /opt/anvil/anvil-lab /usr/local/bin/anvil-lab

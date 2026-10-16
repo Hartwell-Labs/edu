@@ -1,0 +1,4 @@
+{
+  "world_writable": ["/var/lib/anvil-lab/state"],
+  "services": ["anvil-lab.service"]
+}

@@ -1,0 +1,4 @@
+{
+  "config": "/etc/logrotate.d/anvil-lab",
+  "retention": 3
+}

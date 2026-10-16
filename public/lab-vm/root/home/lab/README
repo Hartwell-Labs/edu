@@ -1,0 +1,2 @@
+This is your local lab machine. No network — nothing leaves it.
+Check any task with: labcheck --task <id>

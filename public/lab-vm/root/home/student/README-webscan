@@ -1,0 +1,10 @@
+sec-l1-webscan
+
+  1. read the hosts in targets.txt
+  2. probe each of them exactly once — no retries, no extra hosts
+  3. write /home/student/scan.json: a JSON list of {"host": ..., "status": ...},
+     sorted by host, never longer than the number in ./budget
+  4. labcheck --task sec-l1-webscan
+
+The machine is offline, so probe the canned responses in ./fixtures and build
+the report from those.

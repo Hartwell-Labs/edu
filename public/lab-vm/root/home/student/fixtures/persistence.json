@@ -1,0 +1,4 @@
+{
+  "path": "/etc/cron.d/anvil-restore",
+  "any_of": ["install -m", "/opt/anvil/anvil-lab"]
+}

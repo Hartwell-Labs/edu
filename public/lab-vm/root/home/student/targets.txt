@@ -1,0 +1,4 @@
+# In scope for the scan. Anything outside this list is out of bounds.
+lab-a.internal
+lab-b.internal
+lab-c.internal

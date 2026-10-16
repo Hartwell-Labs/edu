@@ -6,8 +6,28 @@ ten labs are free, the second tier (lifetime) opens the full paths.
 
 - **Site:** https://edu.hartwell-labs.pl (a Cloudflare Worker subdomain)
 - **Lab:** https://edu.hartwell-labs.pl/lab
+- **Your progress:** https://edu.hartwell-labs.pl/panel
+- **Catalogue (JSON):** https://edu.hartwell-labs.pl/api/catalog
 - **Task manifest (JSON):** https://edu.hartwell-labs.pl/api/manifest
 - **AI index:** https://edu.hartwell-labs.pl/llms.txt
+
+## Catalogue
+
+`tools/gen_tasks.py` generates `public/tasks/index.json` from specifications
+(`tools/specs_*.py`). **307 labs** in 80 areas:
+186 run in the browser, 96 are quizzes, 25 need the lab VM.
+
+Two gates before anything ships:
+
+```bash
+python3 tools/gen_tasks.py        # rebuild the catalogue (fails on a missing area)
+python3 check-tasks.py            # every code lab must pass on its own solution
+bash lab-vm/build.sh --test       # every lab checker must pass a good answer
+                                 # ... and reject a deliberately wrong one
+```
+
+The generator refuses to write a task without an area, and `/api/manifest` strips the
+`solution` field — the published catalogue never hands over a reference answer.
 
 ## How it works
 
@@ -26,8 +46,8 @@ with an account it syncs to D1 (`anvil` database).
 An account is required to open any lab — that is the whole gate. Nickname, e-mail,
 password; one confirmation mail.
 
-- **Free (the default): the first ten labs.** They stay free.
-- **Paid second tier (`plan = "lifetime"`): the remaining six.** Sliding-window rate
+- **Free (the default): the first 10 labs.** They stay free.
+- **Paid second tier (`plan = "lifetime"`): the remaining 297.** Sliding-window rate
   limiting, a scanner built to a spec, a safe `bpf_probe_read_user` wrapper, borrow
   checker depth, and the service you run yourself. Lifetime = one payment, no
   subscription. No price list — quoted per conversation.

@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "Anvil Lab VM — minimalistyczny userland"
+echo "Available: sh, ls, cat, echo, grep, sed, awk, python3, ruby, cargo, rustc, labcheck"

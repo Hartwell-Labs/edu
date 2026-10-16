@@ -1,0 +1,7 @@
+/var/log/anvil-lab.log {
+    daily
+    rotate 3
+    missingok
+    notifempty
+    compress
+}

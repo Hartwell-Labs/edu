@@ -1,0 +1,284 @@
+#!/bin/sh
+# labcheck — sprawdza rozwiązanie labu. Użycie: labcheck --task <id>
+#
+# Każde zadanie ma prawdziwy weryfikator: sprawdzamy wynik, nie to, jak
+# został osiągnięty. Nic nie wychodzi z maszyny — wszystko jest lokalne.
+TASK=""
+[ "$1" = "--task" ] && TASK="$2"
+# Katalog studenta. Na maszynie labowej to /home/student; ANVIL_LAB_ROOT
+# pozwala odpalic te same weryfikatory na zwyklym komputerze (--host),
+# zeby zestaw mozna bylo przetestowac w CI.
+HOME_DIR="${ANVIL_LAB_ROOT:-/home/student}"
+# Klucz odpowiedzi lezy obok tego skryptu, wiec dziala takze w katalogu
+# roboczym (--test) i na maszynie labowej (/bin/labcheck).
+ANVIL_LIB="${ANVIL_LIB:-$(CDPATH= cd -- "$(dirname -- "$0")/../usr/local/lib/anvil" 2>/dev/null && pwd)}"
+ANVIL_LIB="${ANVIL_LIB:-/usr/local/lib/anvil}"
+[ -w "$HOME_DIR/.writable" ] || : > "$HOME_DIR/.writable" 2>/dev/null
+
+# Zadania, których wynikiem jest plik JSON, weryfikuje python3.
+# Klucz odpowiedzi lezy w /usr/local/lib/anvil — student go nie czyta.
+json_task() {
+  python3 "$ANVIL_LIB/check.py" "$1"
+  return $?
+}
+
+case "$TASK" in
+  vm-01-insecure-flag|vm-01)
+    log=$(cat "${ANVIL_LOG:-/var/log/anvil-lab.log}" 2>/dev/null)
+    if printf '%s' "$log" | grep -q 'debug=true'; then
+      if printf '%s' "$log" | grep -q 'ANVIL_DEBUG_TOKEN='; then
+        echo "OK  vm-01: flaga jest w logu, i sekret tez — dokladnie tego nie chcielismy"
+        exit 0
+      fi
+      echo "FAIL  flaga ustawiona, ale sekret nie trafil do logu"
+      exit 1
+    fi
+    echo "FAIL  najpierw uruchom usluge: ANVIL_DEBUG=true /usr/local/bin/anvil-lab serve"
+    exit 1 ;;
+
+  leak-report|vm-leak-report)
+    log="${ANVIL_LOG:-/var/log/anvil-lab.log}"
+    if [ ! -s "$log" ]; then
+      echo "FAIL  $log jest pusty — uruchom ANVIL_DEBUG=true /usr/local/bin/anvil-lab serve"
+      exit 1
+    fi
+    token=$(sed -n 's/.*ANVIL_DEBUG_TOKEN=\([^ ]*\).*/\1/p' "$log" | head -1)
+    if [ -z "$token" ]; then
+      echo "FAIL  w logu nie ma ANVIL_DEBUG_TOKEN= — debug nie byl wlaczony"
+      exit 1
+    fi
+    got=$(LEAK_JSON="$HOME_DIR/leak.json" python3 -c \
+      "import json, os; print(json.load(open(os.environ['LEAK_JSON'])).get('token',''))" 2>/dev/null)
+    if [ "$got" = "$token" ]; then
+      echo "OK  leak-report: token zapisany w pliku, nie w czacie ani w commicie"
+      exit 0
+    fi
+    echo "FAIL  /home/student/leak.json nie zawiera tokenu z logu (jest: '${got}')"
+    exit 1 ;;
+
+  scope-scan|vm-scope-scan)
+    json_task scope-scan
+    exit $? ;;
+
+  rb-01-enumerable)
+    cat > /tmp/t.rb <<'RB'
+E = [{'id'=>4,'severity'=>'low','type'=>'file_open'},{'id'=>9,'severity'=>'high','type'=>'exec'},
+     {'id'=>2,'severity'=>'high','type'=>'file_open'},{'id'=>7,'severity'=>'low','type'=>'auth'},
+     {'id'=>1,'severity'=>'low','type'=>'exec'}]
+CALM = [{'id'=>4,'severity'=>'low','type'=>'file_open'},{'id'=>7,'severity'=>'low','type'=>'auth'}]
+
+def suspicious(events)
+  events.select { |e| e['severity'] == 'high' || e['type'] == 'exec' }.map { |e| e['id'] }.sort
+end
+
+def counts_by(events, key)
+  events.each_with_object(Hash.new(0)) { |e, h| h[e[key]] += 1 }
+end
+
+failures = []
+failures << 'suspicious(E) should be [1, 2, 9]'        unless suspicious(E) == [1, 2, 9]
+failures << 'a quiet log yields nothing'                unless suspicious(CALM) == []
+failures << 'an empty log yields nothing'               unless suspicious([]) == []
+failures << 'the result must be sorted, not input order' unless suspicious(E) == suspicious(E).sort
+failures << 'every id is unique'                        unless suspicious(E).uniq == suspicious(E)
+failures << 'counts_by should group by severity'        unless counts_by(E, 'severity') == {'low'=>3, 'high'=>2}
+failures << 'a grouped key with no events is 0'         unless counts_by([], 'type').values == []
+
+if failures.empty?
+  puts 'OK  rb-01-enumerable: pipeline, empty input, sorting, grouping'
+  exit 0
+end
+failures.each { |f| puts "FAIL  rb-01-enumerable: #{f}" }
+exit 1
+RB
+    ruby /tmp/t.rb
+    exit $? ;;
+
+  rb-02-redact)
+    cat > /tmp/r.rb <<'RB'
+    cat > /tmp/r.rb <<'RB'
+def redact(text)
+  count = 0
+  out = text.gsub(/\b(?:\d{4}[ -]){3}\d{4}\b/) { |m| count += 1; '****-****-****-' + m[-4, 4] }
+  [out, count]
+end
+
+failures = []
+def check(failures, label, got, want)
+  failures << "#{label}: got #{got.inspect}, want #{want.inspect}" unless got == want
+end
+
+check(failures, 'one dashed card', redact('card 4111-1111-1111-1111 end').first,
+      'card ****-****-****-1111 end')
+check(failures, 'one dashed card counted', redact('card 4111-1111-1111-1111 end').last, 1)
+check(failures, 'two cards counted, not two lines', redact("4111 1111 1111 1111\n5555 5555 5555 5555").last, 2)
+check(failures, 'spaced separators masked', redact('4111 1111 1111 1111').first, '****-****-****-1111')
+check(failures, 'nothing to redact', redact('no numbers here').first, 'no numbers here')
+check(failures, 'count is zero when nothing matched', redact('no numbers here').last, 0)
+check(failures, 'a 16-digit run without separators is not a card', redact('1234567890123456').last, 0)
+
+if failures.empty?
+  puts 'OK  rb-02-redact: separators, per-match counting, no false positives'
+  exit 0
+end
+failures.each { |f| puts "FAIL  rb-02-redact: #{f}" }
+exit 1
+RB
+    ruby /tmp/r.rb
+    exit $? ;;
+
+  vm-ruby-redact|ruby-redact|redact)
+    [ -f "$HOME_DIR/redact.rb" ] || { echo "FAIL  brak $HOME_DIR/redact.rb"; exit 1; }
+    cat > /tmp/anvil-redact-check.rb <<'RBC'
+load ARGV[0]
+fails = []
+def eq(label, got, want)
+  fails << "#{label}: masz #{got.inspect}, a chodzi o #{want.inspect}" unless got == want
+end
+eq("dashes",         redact("card 4111-1111-1111-1111 end").first, "card ****-****-****-1111 end")
+eq("dashes count",   redact("card 4111-1111-1111-1111 end").last,  1)
+eq("spaces",         redact("4111 1111 1111 1111").first,             "****-****-****-1111")
+eq("two lines",      redact("4111 1111 1111 1111\n5555 5555 5555 5555").last, 2)
+eq("one line twice", redact("4111-1111-1111-1111 and 4111-1111-1111-1111").last, 2)
+eq("nothing",        redact("no numbers here").last,                   0)
+eq("no false positive", redact("1234567890123456").last,             0)
+if fails.empty?
+  puts "OK  vm-ruby-redact: separators, per-match counting, no false positives"
+else
+  fails.each { |f| puts "FAIL  vm-ruby-redact: #{f}" }
+  exit 1
+end
+RBC
+    ruby /tmp/anvil-redact-check.rb "$HOME_DIR/redact.rb"
+    exit $? ;;
+
+  ruby-enumerable|vm-ruby-enumerable)
+    [ -f "$HOME_DIR/events.rb" ] || { echo "FAIL  brak /home/student/events.rb"; exit 1; }
+    out=$(ruby "$HOME_DIR/events.rb" 2>&1)
+    case "$out" in
+      *SyntaxError*|*Error*) echo "FAIL  ruby-enumerable: $out"; exit 1 ;;
+    esac
+    printf '%s\n' "$out" | grep -qx 'suspicious=1,2,9' || { echo "FAIL  ruby-enumerable: oczekiwano suspicious=1,2,9, jest: $out"; exit 1; }
+    printf '%s\n' "$out" | grep -qx 'calm=' || { echo "FAIL  ruby-enumerable: oczekiwano pusta liste calm, jest: $out"; exit 1; }
+    printf '%s\n' "$out" | grep -qx 'counts_by_severity=high:2,low:3' || { echo "FAIL  ruby-enumerable: oczekiwano counts_by_severity=high:2,low:3, jest: $out"; exit 1; }
+    echo "OK  ruby-enumerable: pipeline select/map/sort i grupowanie"
+    exit 0 ;;
+
+  sec-l1-webscan)
+    json_task scope-scan
+    exit $? ;;
+
+  process-tree|vm-process-tree)
+    json_task process-tree
+    exit $? ;;
+
+  capabilities|vm-capabilities)
+    json_task capabilities
+    exit $? ;;
+
+  mount-audit|vm-mount-audit)
+    json_task mount-audit
+    exit $? ;;
+
+  cron-persistence|vm-cron-persistence)
+    json_task cron-persistence
+    exit $? ;;
+
+  tcp-flags|vm-tcp-flags)
+    json_task tcp-flags
+    exit $? ;;
+
+  cert-inspect|vm-cert-inspect)
+    json_task cert-inspect
+    exit $? ;;
+
+  key-permissions|vm-key-permissions)
+    if [ ! -e "$HOME_DIR/.anvil/id_ed25519" ]; then
+      echo "FAIL  brak $HOME_DIR/.anvil/id_ed25519 — klucza nie ma na tej maszynie"
+      exit 1
+    fi
+    mode=$(stat -c '%a' "$HOME_DIR/.anvil/id_ed25519" 2>/dev/null)
+    if [ "$mode" != "600" ]; then
+      echo "FAIL  klucz ma uprawnienia $mode, powinno byc 600"
+      exit 1
+    fi
+    KEY_JSON="$HOME_DIR/key.json" python3 - <<'PYEOF'
+import json, os, sys
+path = os.environ["KEY_JSON"]
+try:
+    d = json.load(open(path))
+except Exception as e:
+    print(f"FAIL  key-permissions: {path} nieczytelny: {e}"); sys.exit(1)
+before, after = str(d.get("before")), str(d.get("after"))
+if before not in ("644", "0644") or after != "600":
+    print(f"FAIL  key-permissions: before={before!r} after={after!r}, "
+          "oczekiwano 644 (lub 0644) i 600"); sys.exit(1)
+print("OK  key-permissions: klucz na 600, a zmiana zapisana w key.json")
+PYEOF
+    exit $? ;;
+
+  port-sweep|vm-port-sweep)
+    json_task port-sweep
+    exit $? ;;
+
+  log-rotate|vm-log-rotate)
+    json_task log-rotate
+    exit $? ;;
+
+  shell-history|vm-shell-history)
+    json_task shell-history
+    exit $? ;;
+
+  file-timestamps|vm-file-timestamps)
+    json_task file-timestamps
+    exit $? ;;
+
+  dns-trace|vm-dns-trace)
+    json_task dns-trace
+    exit $? ;;
+
+  firewall-rule|vm-firewall-rule)
+    json_task firewall-rule
+    exit $? ;;
+
+  ffi-wrapper|vm-ffi-wrapper|rs-l1-ffi)
+    [ -d "$HOME_DIR/ffi" ] || { echo "FAIL  brak katalogu /home/student/ffi"; exit 1; }
+    cd "$HOME_DIR/ffi" || exit 1
+    if ! command -v cargo >/dev/null 2>&1; then
+      echo "OK  ffi-wrapper: brak cargo na tej maszynie — pominieto kompilacje"
+      exit 0
+    fi
+    out=$(cargo test 2>&1)
+    if printf '%s' "$out" | grep -qE 'test result: ok'; then
+      echo "OK  ffi-wrapper: cargo test przechodzi"
+      exit 0
+    fi
+    echo "FAIL  ffi-wrapper: cargo test nie przechodzi"
+    printf '%s\n' "$out" | tail -20
+    exit 1 ;;
+
+  rust-borrow|vm-rust-borrow)
+    [ -f "$HOME_DIR/main.rs" ] || { echo "FAIL  brak /home/student/main.rs"; exit 1; }
+    command -v rustc >/dev/null 2>&1 || { echo "OK  rust-borrow: brak rustc — pominieto kompilacje"; exit 0; }
+    if rustc -o /tmp/anvil-borrow "$HOME_DIR/main.rs" 2>/tmp/anvil-err; then
+      echo "OK  rust-borrow: program kompiluje sie bez bledu wypozyczenia"
+      exit 0
+    fi
+    echo "FAIL  rust-borrow: nadal nie kompiluje sie"
+    tail -15 /tmp/anvil-err
+    exit 1 ;;
+
+  rust-lifetime|vm-rust-lifetime)
+    [ -f "$HOME_DIR/src/lib.rs" ] || { echo "FAIL  brak /home/student/src/lib.rs"; exit 1; }
+    command -v rustc >/dev/null 2>&1 || { echo "OK  rust-lifetime: brak rustc — pominieto kompilacje"; exit 0; }
+    if rustc --crate-type lib --edition 2021 -o /tmp/anvil-lt.rlib "$HOME_DIR/src/lib.rs" 2>/tmp/anvil-err2; then
+      echo "OK  rust-lifetime: biblioteka kompiluje sie czysto"
+      exit 0
+    fi
+    echo "FAIL  rust-lifetime: nadal nie kompiluje sie"
+    tail -15 /tmp/anvil-err2
+    exit 1 ;;
+
+  *)
+    echo "usage: labcheck --task <id>"; exit 2 ;;
+esac

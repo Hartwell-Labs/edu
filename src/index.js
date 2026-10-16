@@ -172,7 +172,7 @@ async function sendMail(env, to, subject, text, kind) {
   }
 }
 
-const verifyLink = (token) => `https://edu.hartwell-labs.pl/api/auth/verify?token=${token}`;
+const verifyLink = (token) => `https://edu.hartwell-labs.pl/verify?token=${token}`;
 
 async function sendVerification(env, user) {
   const token = randHex(24);
@@ -292,6 +292,12 @@ export default {
 
       if (p === "/api/auth/verify") {
         const token = url.searchParams.get("token") || "";
+        // Link z maila ma prowadzic na strone, nie na surowy JSON — człowiek
+        // kliknie link z poczty, a nie z terminala.
+        if (request.headers.get("accept")?.includes("text/html")) {
+          const res = await env.ASSETS.fetch(new Request("https://assets.local/verify/index.html"));
+          return new Response(res.body, { status: 200, headers: res.headers });
+        }
         if (!/^[0-9a-f]{48}$/.test(token)) return json({ ok: false, error: "bad link" }, { status: 400 });
         const row = await env.DB.prepare("SELECT id FROM users WHERE verify_token = ?").bind(token).first();
         if (!row) return json({ ok: false, error: "the link expired or was already used" }, { status: 400 });
@@ -372,10 +378,51 @@ export default {
         return json({ ok: true, progress: await mergeProgress(env, user.id, body.tasks) });
       }
 
-      if (p === "/api/manifest") {
-        const res = await env.ASSETS.fetch(new Request("https://assets.local/tasks/index.json"));
+      if (p === "/api/access/request" && request.method === "POST") {
+        // Prosba o dostep do drugiego tieru. Swiadomie bez platnosci karta —
+        // brak procesora jest lepszy niz udawany checkout. Trafia do D1,
+        // admin nadaje plan przez admin.py grant.
+        const body = await request.json().catch(() => ({}));
+        const email = String(body.email || "").trim().toLowerCase();
+        if (!EMAIL_RE.test(email))
+          return json({ error: "That e-mail address does not look valid." }, { status: 400 });
+        const why = String(body.why || "").trim().slice(0, 2000);
+        const handle = String(body.handle || "").trim().toLowerCase().slice(0, 24);
+        const user = await currentUser(request, env);
+        await env.DB.prepare(
+          "INSERT INTO access_requests (user_id, handle, email, why, created_at) VALUES (?,?,?,?,?)",
+        ).bind(user ? user.id : null, handle || null, email, why || null, now()).run();
+
+        let reply = false;
+        if (user && env.RESEND_API_KEY) {
+          reply = await sendMail(
+            env, email, "We got your Anvil access request",
+            `Hi${handle ? " " + handle : ""},\n\nThanks for asking about the second tier. A person reads ` +
+            `these, not a checkout bot — expect a reply with a number within a working day.\n\n` +
+            `— the Anvil team`,
+            "access_request",
+          );
+        }
+        return json({ ok: true, emailed: reply });
+      }
+
+      if (p === "/api/manifest" || p === "/api/catalog") {        const res = await env.ASSETS.fetch(new Request("https://assets.local/tasks/index.json"));
         if (!res.ok) return json({ tasks: [], error: `manifest ${res.status}` }, { status: 500 });
-        return json(await res.json(), { cacheTtl: 0 });
+        const data = await res.json();
+        // Katalog jest publiczny, wiec **nie moze** zawierac rozwiazan
+        // referencyjnych — inaczej kazda lekcja jest do skopiowania jednym
+        // zapytaniem. check-tasks.py sprawdza je lokalnie, nie przez HTTP.
+        const tasks = (data.tasks || []).map((t) => {
+          if (p === "/api/catalog") {
+            return {
+              id: t.id, track: t.track, area: t.area || t.track, title: t.title,
+              difficulty: t.difficulty, points: t.points, executor: t.executor, free: !!t.free,
+            };
+          }
+          const { solution, ...rest } = t;
+          return rest;
+        });
+        return json({ ...data, tasks, solution_stripped: true }, { cacheTtl: 0 });
       }
 
       const res = await env.ASSETS.fetch(request);

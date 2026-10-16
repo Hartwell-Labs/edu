@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Lab service. Started with ANVIL_DEBUG=true it writes the token to the log —
+   exactly the bug the lab asks you to find."""
+import os, sys, time, pathlib
+DEBUG = os.environ.get("ANVIL_DEBUG") == "true"
+TOKEN = os.environ.get("ANVIL_DEBUG_TOKEN", "anvil-secret-do-not-log")
+LOG = os.environ.get("ANVIL_LOG", "/var/log/anvil-lab.log")
+
+def log(msg):
+    pathlib.Path(LOG).parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG, "a") as f:
+        f.write(f"{time.time():.0f} {msg}\n")
+
+if "--version" in sys.argv:
+    print("anvil-lab 1.0.0"); sys.exit(0)
+
+log(f"start, debug={str(DEBUG).lower()}")
+if DEBUG:
+    log(f"ANVIL_DEBUG_TOKEN={TOKEN}")          # the leak — this is the point of the lab
+if "serve" in sys.argv:
+    print(f"anvil-lab listening on 127.0.0.1:8080 (debug={DEBUG})")
+    log("serve: listening on 127.0.0.1:8080")
+    import http.server
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.end_headers()
+            self.wfile.write(b"anvil-lab ok\n")
+        def log_message(self, *a): log("http " + self.path)
+    http.server.HTTPServer(("127.0.0.1", 8080), H).serve_forever()

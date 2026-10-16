@@ -1,0 +1,6 @@
+rs-l1-ffi
+
+  1. cd /home/student/ffi
+  2. implement read_user, with a real error path (no unwrap on a short read)
+  3. add #[cfg(test)] tests for: success, empty buffer, short read
+  4. labcheck --task rs-l1-ffi
