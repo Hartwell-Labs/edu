@@ -131,24 +131,73 @@ jobs:
       - name: rejestracja odrzuca domeny rezerwowe i ma limit
         run: |
           V=$(python3 -c "import hashlib;print(hashlib.pbkdf2_hmac('sha256',b'x'*12,b'anvil:ci',210000).hex())")
+
+          # x-anvil-client daje tej bramce wlasny kubelek. Bez tego kazdy
+          # przebieg na GitHubie dzielilby jedna pulę z 5 miejscami, a ten
+          # test zuzywa 9 — drugi push na glowna bylby czerwony z 429,
+          # a nie z powodu bledu w kodzie.
+          IP="run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          reg() { # reg <handle> <email>
+            curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8787/api/auth/register \
+              -H 'content-type: application/json' \
+              -H "x-anvil-client: $IP" \
+              -d "{\"handle\":\"$1\",\"email\":\"$2\",\"verifier\":\"$V\",\"password_length\":12}"
+          }
+
           # RFC 2606 — nikt prawdziwy nie ma takiego adresu, a boty tak
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8787/api/auth/register \
-            -H 'content-type: application/json' \
-            -d "{\"handle\":\"ci1\",\"email\":\"x@example.com\",\"verifier\":\"$V\",\"password_length\":12}")
+          code=$(reg ci1 "x@example.com")
           [ "$code" = "400" ] || { echo "::error::domena rezerwowa przeszla ($code)"; exit 1; }
           echo "  domena rezerwowa odrzucona"
 
           # limit 5 rejestracji na godzine z jednego adresu
-          for i in $(seq 1 8); do
-            curl -s -o /dev/null -X POST http://127.0.0.1:8787/api/auth/register \
-              -H 'content-type: application/json' \
-              -d "{\"handle\":\"ci$i\",\"email\":\"ci$i@gmail.com\",\"verifier\":\"$V\",\"password_length\":12}"
-          done
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8787/api/auth/register \
-            -H 'content-type: application/json' \
-            -d "{\"handle\":\"ciX\",\"email\":\"ciX@gmail.com\",\"verifier\":\"$V\",\"password_length\":12}")
+          for i in $(seq 1 8); do reg "ci$i" "ci$i@gmail.com" >/dev/null; done
+          code=$(reg ciX "ciX@gmail.com")
           [ "$code" = "429" ] || { echo "::error::limit IP nie zadzialal (otrzymano $code)"; exit 1; }
           echo "  limit IP zadzialal"
+
+      - name: limit nie jest obchodzony przez inny naglowek
+        run: |
+          # x-anvil-client istnieje tylko po to, by CI mialo swoja pula.
+          # Gdyby request mogl uciec z wlasnego kubelka, limit przestalby
+          # cokolwiek znaczyc — a to jedyna rzecz trzymajaca boty z darmowych
+          # skrzynek. Ten krok najpierw wyczerpuje limit jednym naglowkiem,
+          # a probuje zarejestrowac sie z innego: limit musi zostac.
+          V=$(python3 -c "import hashlib;print(hashlib.pbkdf2_hmac('sha256',b'x'*12,b'anvil:ci2',210000).hex())")
+          R="$GITHUB_RUN_ID$GITHUB_RUN_ATTEMPT"
+          IP="obchod-$R"
+          reg() { # reg <handle> <header>
+            curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8787/api/auth/register \
+              -H 'content-type: application/json' \
+              -H "$2" \
+              -d "{\"handle\":\"h$R-$1\",\"email\":\"h$R-$1@gmail.com\",\"verifier\":\"$V\",\"password_length\":12}"
+          }
+          for i in 1 2 3 4 5; do
+            code=$(reg "a$i" "x-anvil-client: $IP")
+            [ "$code" = "200" ] || { echo "::error::probka $i: oczekiwano 200, jest $code"; exit 1; }
+          done
+          # inny naglowek, ten sam limit
+          code=$(reg "obcy" "x-forwarded-for: 10.9.9.9")
+          [ "$code" = "429" ] || {
+            echo "::error::limit przestal obowiazywac po zmianie naglowka ($code) — limit jest do obejscia"
+            exit 1
+          }
+          echo "  limit obowiazuje niezaleznie od obcego naglowka"
+
+      - name: domena rezerwowa odrzucona takze z obcym naglowkiem
+        run: |
+          V=$(python3 -c "import hashlib;print(hashlib.pbkdf2_hmac('sha256',b'x'*12,b'anvil:ci3',210000).hex())")
+          R="$GITHUB_RUN_ID$GITHUB_RUN_ATTEMPT"
+          i=0
+          for host in example.com test.org invalid localhost example.net example.edu test.com \
+                      example.test foo.test foo.invalid foo.localhost mailinator.com yopmail.com; do
+            i=$((i+1))
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8787/api/auth/register \
+              -H 'content-type: application/json' \
+              -H "x-anvil-client: rezerwowa-$R-$i" \
+              -d "{\"handle\":\"r$R-$i\",\"email\":\"x@$host\",\"verifier\":\"$V\",\"password_length\":12}")
+            [ "$code" = "400" ] || { echo "::error::$host przeszedl ($code)"; exit 1; }
+          done
+          echo "  $i domen zarezerwowanych odrzuconych"
 
   bezpieczenstwo:
     name: bramki na stronie glownej (hartwell-labs.pl)

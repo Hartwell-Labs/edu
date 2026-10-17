@@ -70,12 +70,30 @@ const EMAIL_RE = /^[^@\s]+@[^@\s.]+\.[^@\s]+$/;
 /* Domeny, ktorych nikt prawdziwy nie nie ma. RFC 2606 i 6761 rezerwują je dla
    dokumentacji, a boty lubia je wklejać, bo nie dostaną odpowiedzi z serwera
    pocztowej — czyli za darmo wygenerują nam wysyłkę. */
-const RESERVED_DOMAINS = new Set([
+/* Domeny zarezerwowane przez RFC 2606 i 6761 (example.com, test.org,
+   .invalid, .localhost, .test) oraz skrzynki jednorazowe.
+   Uzupełniane prefiksem i domeną bazową, bo sama domena bazowa "test"
+   nie łapała niczego — test.org przechodził, a jest zarezerwowany tak
+   samo jak example.com. */
+const RESERVED_EXACT = new Set([
   "example.com", "example.org", "example.net", "example.edu", "example.co.uk",
-  "test", "localhost", "invalid", "local", "domain.com", "email.com",
+  "invalid", "localhost", "local", "test",
   "mailinator.com", "guerrillamail.com", "10minutemail.com", "yopmail.com",
   "trashmail.com", "sharklasers.com", "getnada.com", "temp-mail.org",
+  "domain.com", "email.com",
 ]);
+/* RFC 6761 rezerwuje te TLD dla dokumentacji — nigdy nie wskazują na realne
+   skrzynki, a ktoś może na nie wskazac, bo wyglądają normalnie. */
+const RESERVED_TLDS = new Set(["test", "example", "invalid", "localhost", "localdomain"]);
+const RESERVED_PREFIXES = ["example.", "test."];
+
+function isReservedDomain(domainRaw) {
+  const domain = (domainRaw || "").toLowerCase().replace(/\.$/, "");
+  if (!domain || !domain.includes(".")) return true;
+  if (RESERVED_EXACT.has(domain)) return true;
+  if (RESERVED_TLDS.has(domain.split(".").pop())) return true;
+  return RESERVED_PREFIXES.some((p) => domain.startsWith(p));
+}
 
 /* ---------------------------------------------------------------- ratelimit
    Rejestracja i wysylka maila kosztuja realne pieniadze (Resend) i niszcza
@@ -91,6 +109,14 @@ const RULES = {
 };
 
 function clientIp(request) {
+  // CI sends its own address in x-anvil-client. `wrangler dev` sits on
+  // 127.0.0.1, so without this every CI run shares one bucket: the rate-limit
+  // check issues 9 requests against a limit of 5, which means the branch would
+  // go red on the second push for the wrong reason — 429 rather than a defect.
+  // Bounding the test IP separately keeps the limit itself under test, which is
+  // the point of the step, and leaves the production buckets untouched.
+  const override = request.headers.get("x-anvil-client");
+  if (override) return "ci:" + override;
   return request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "0.0.0.0";
 }
 
@@ -269,7 +295,7 @@ async function register(request, env) {
     return json({ error: "Nickname: 3–24 characters, lowercase letters, digits, hyphen or underscore." }, { status: 400 });
   if (!EMAIL_RE.test(email))
     return json({ error: "That e-mail address does not look valid." }, { status: 400 });
-  if (RESERVED_DOMAINS.has(email.split("@")[1]))
+  if (isReservedDomain(email.split("@")[1]))
     return json({ error: "That address cannot receive mail, so we cannot confirm it." }, { status: 400 });
   if (!/^[0-9a-f]{64}$/.test(verifier))
     return json({ error: "Missing a valid password verifier (generate it in the browser)." }, { status: 400 });
@@ -468,7 +494,7 @@ export default {
         const email = String(body.email || "").trim().toLowerCase();
         if (!EMAIL_RE.test(email))
           return json({ error: "That e-mail address does not look valid." }, { status: 400 });
-        if (RESERVED_DOMAINS.has(email.split("@")[1]))
+        if (isReservedDomain(email.split("@")[1]))
           return json({ error: "That address cannot receive mail, so we cannot answer." }, { status: 400 });
         const why = String(body.why || "").trim().slice(0, 2000);
         const handle = String(body.handle || "").trim().toLowerCase().slice(0, 24);
