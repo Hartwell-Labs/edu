@@ -144,8 +144,21 @@ function localBucket(rule, key) {
  * twarda granica kosztu.
  */
 function rateLimited(request, rule) {
-  const b = localBucket(rule, clientIp(request));
-  return b.ok ? null : "Too many attempts from this address. Try again later.";
+  const ip = clientIp(request);
+  const b = localBucket(rule, ip);
+  if (b.ok) return null;
+  // Rate limit is per-isolate in memory, so a 429 is indistinguishable from an
+  // outage without this line. Logged whenever the bucket is spent, which is
+  // also the signal worth alerting on: either one person retrying too hard, or
+  // someone working around the limit.
+  console.warn(JSON.stringify({
+    message: "rate limit hit",
+    rule,
+    ip,
+    limit: RULES[rule].limit,
+    windowMs: RULES[rule].windowMs,
+  }));
+  return "Too many attempts from this address. Try again later.";
 }
 
 /** Dzienny limit wysylki — ostatnia linia obrony przed kazdym sposobem obejcia limitu IP. */
@@ -247,7 +260,12 @@ const MAIL_FROM = "Anvil <labs@hartwell-labs.pl>";
 
 /** Wysyła maila przez Resend. Brak klucza = brak wysyłki, ale konto działa. */
 async function sendMail(env, to, subject, text, kind) {
-  if (!env.RESEND_API_KEY) return false;
+  if (!env.RESEND_API_KEY) {
+    // Not a failure in local dev, but in production a missing secret means
+    // every confirmation link silently does not exist. Worth one line.
+    console.error(JSON.stringify({ message: "mail not sent: RESEND_API_KEY unset", kind }));
+    return false;
+  }
   try {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -257,8 +275,23 @@ async function sendMail(env, to, subject, text, kind) {
     const ok = r.ok;
     await env.DB.prepare("INSERT INTO mail_outbox (to_addr, subject, kind, created_at) VALUES (?,?,?,?)")
       .bind(to, subject, kind, now()).run().catch(() => {});
+    if (!ok) {
+      // Costs money per call and the response body says why. Without this the
+      // only symptom is "user says the mail never arrived".
+      console.error(JSON.stringify({
+        message: "mail send rejected",
+        kind,
+        status: r.status,
+        body: (await r.text()).slice(0, 300),
+      }));
+    }
     return ok;
-  } catch {
+  } catch (e) {
+    console.error(JSON.stringify({
+      message: "mail send threw",
+      kind,
+      error: e instanceof Error ? e.message : String(e),
+    }));
     return false;
   }
 }
@@ -295,8 +328,18 @@ async function register(request, env) {
     return json({ error: "Nickname: 3–24 characters, lowercase letters, digits, hyphen or underscore." }, { status: 400 });
   if (!EMAIL_RE.test(email))
     return json({ error: "That e-mail address does not look valid." }, { status: 400 });
-  if (isReservedDomain(email.split("@")[1]))
+  if (isReservedDomain(email.split("@")[1])) {
+    // A throwaway or reserved domain means nobody pays to read the
+    // confirmation mail, so this address can never become a real account.
+    // Counted separately from ordinary 400s: a steady stream here is bots
+    // probing for free signups, not people mistyping.
+    console.warn(JSON.stringify({
+      message: "registration rejected: reserved domain",
+      domain: email.split("@")[1],
+      ip: clientIp(request),
+    }));
     return json({ error: "That address cannot receive mail, so we cannot confirm it." }, { status: 400 });
+  }
   if (!/^[0-9a-f]{64}$/.test(verifier))
     return json({ error: "Missing a valid password verifier (generate it in the browser)." }, { status: 400 });
   if (String(body.password_length || 0) < 10)

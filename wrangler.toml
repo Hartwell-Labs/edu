@@ -1,5 +1,5 @@
 name = "hartwell-edu"
-compatibility_date = "2026-10-01"
+compatibility_date = "2026-10-17"
 account_id = "29ee063c29d9e8f27a8863fadcaa9073"
 main = "src/index.js"
 
@@ -21,3 +21,19 @@ run_worker_first = true
 binding = "DB"
 database_name = "anvil"
 database_id = "45975b33-8759-475a-bb69-7735a849961f"
+
+# Bez tego dashboard nie ma nic z dzialania Workera. Limit rejestracji
+# dziala per izolata w pamieci, wiec wykrzykniecie (429) wyglada tak
+# samo jak awaria — bez logow nie da sie tego rozroznic.
+# Traces na niskim samplingu: wolumen niepotrzebny, ale wolna sciezka
+# ma byc widoczna.
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 0.05

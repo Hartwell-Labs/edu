@@ -12,3 +12,7 @@ public/lab-vm/*.iso
 # build.sh nadaje je w stage() przy kazdym budowaniu. Pliki, ktore wygladaja
 # jak sekrety (id_ed25519, lab.key), sa celowo uszkodzone i mialy byc
 # jednorazowe — nikt z nich nie otwiera niczego.
+
+# Typy bindingow generowane z wrangler.toml — nigdy nie commitowac, bo
+# rozjezdzaja sie z konfiguracja szybciej niz ktokolwiek zauważy.
+worker-configuration.d.ts
