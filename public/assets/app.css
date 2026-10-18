@@ -378,3 +378,108 @@ dialog::backdrop { background: rgba(23,21,20,.35); }
   .hero { padding: 40px 0 12px; }
   .hero h1 { font-size: 30px; }
 }
+
+/* ── Mobile ──────────────────────────────────────────────────────────────── */
+
+/* The phone menu. A <details> disclosure rather than a JS toggle: it keeps
+   working with scripting off, is announced correctly, and needs no focus
+   trapping. Hidden on desktop, where the inline nav already does the job. */
+.mnav { display: none; }
+
+.mnav-btn {
+  list-style: none;
+  cursor: pointer;
+  font: 500 14px/1 var(--sans);
+  color: var(--ink-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 12px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  user-select: none;
+}
+.mnav-btn::-webkit-details-marker { display: none; }
+.mnav-btn::after {
+  content: "";
+  width: 7px; height: 7px;
+  margin-left: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform .15s ease;
+}
+.mnav[open] .mnav-btn::after { transform: translateY(1px) rotate(225deg); }
+.mnav-btn:hover { color: var(--ink); border-color: var(--ink-3); }
+
+.mnav-panel {
+  position: absolute;
+  right: 0;
+  z-index: 40;
+  min-width: 200px;
+  margin-top: 8px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lift);
+  display: flex;
+  flex-direction: column;
+}
+.mnav-panel a {
+  color: var(--ink-2);
+  font-size: 15px;
+  text-decoration: none;
+  padding: 11px 12px;
+  border-radius: 8px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.mnav-panel a:hover { background: var(--bg-soft); color: var(--ink); }
+.mnav-panel a.on { color: var(--ink); font-weight: 550; }
+
+@media (max-width: 900px) {
+  .header-in { position: relative; gap: 12px; }
+  .mnav { display: block; margin-left: auto; }
+  .mnav-panel { right: 0; left: auto; }
+  .who { margin-left: 0 !important; }
+
+  /* The lab sidebar was capped at 44vh with no scroll affordance: the list
+     stopped after three entries and the rest sat behind a swipe nobody
+     expects. Let the document scroll instead — a phone has one scroll axis. */
+  .lab { min-height: 0; }
+  .lab-side { max-height: none; }
+  #side { overflow: visible; padding-bottom: 20px; }
+
+  /* Tap targets. 44px is the iOS guideline, 48px the Android one; below 32px a
+     fingertip starts missing. */
+  nav.main a,
+  .cmd button,
+  .chipbtn,
+  .filters button { min-height: 44px; }
+  .cmd button { padding: 0 14px; }
+  .chipbtn { padding: 0 16px; }
+}
+
+@media (max-width: 560px) {
+  .filters { gap: 8px; }
+  .lab-main { padding: 18px 16px 56px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mnav-btn::after { transition: none; }
+}
+
+@media (max-width: 420px) {
+  /* The header row could not fit at 320px: brand + disclosure + account button
+     came to 394px. The brand's trailing subtitle is the only part that carries
+     no information the logo does not, so it is what gives way — and the button
+     tightens rather than wrapping the row onto a second line. */
+  .header-in { gap: 10px; }
+  .brand > span:last-child { display: none; }
+  .brand { min-width: 0; }
+  .who { flex: 0 0 auto; }
+  .who .btn-sm { padding: 0 11px; }
+  .mnav-btn { padding: 0 10px; }
+}

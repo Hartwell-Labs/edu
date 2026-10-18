@@ -1,0 +1,25 @@
+{
+  "name": "Anvil — interactive labs",
+  "short_name": "Anvil",
+  "description": "Write code, run it in your browser, and see which check failed and why. Over three hundred labs in Cybersecurity, Python, Ruby and Rust; the first ten are free with an account.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#fbfaf9",
+  "theme_color": "#171514",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["education", "developer", "productivity"],
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Your progress", "url": "/panel" },
+    { "name": "Lab machine", "url": "/lab-vm/README.md" }
+  ]
+}

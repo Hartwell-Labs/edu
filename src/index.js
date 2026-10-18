@@ -64,6 +64,25 @@ const json = (data, opts = {}) =>
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 const randHex = (n) => hex(crypto.getRandomValues(new Uint8Array(n)));
 
+/* ---------------------------------------------------------------- tokeny
+   Token z cookie jest jedyną rzeczą, która trzyma konto; token
+   potwierdzający daje wejście na nowe konto. Trzymanie ich w D1 w postaci
+   jawnej zamienia wyciek bazy w masowe przejęcie kont — wystarczy zrzut z
+   panelu Cloudflare albo kopia zapasowa.
+
+   W bazie trzymamy SHA-256 z tokenu, nie token. Bez soli: token to 32 bajty
+   losowe, więc slownik nie ma czego atakowac, a sol tylko komplikowalaby
+   zgodnosc miedzy logowaniem a wylogowaniem. Wyszukiwanie idzie po skrocie,
+   wiec baza nigdy nie porownuje sekretow ani nie zwraca ich w odpowiedzi.
+
+   Faza EXPAND: kolumny jawne zostaja i sa wciaz zapisywane, wiec stary build
+   dzialajacy rownolegle nadal dziala. Usuniecie ich to osobna migracja,
+   dopiero gdy nic nie czyta starej nazwy. */
+async function tokenHash(token) {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(token)));
+  return hex(d);
+}
+
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{2,23}$/;
 const EMAIL_RE = /^[^@\s]+@[^@\s.]+\.[^@\s]+$/;
 
@@ -192,9 +211,11 @@ const now = () => Date.now();
 async function createSession(db, userId) {
   const token = randHex(32);
   const t = now();
+  // Dual-write: jawna kolumna zostaje do osobnej migracji CONTRACT, ale od
+  // tej chwili to skrot jest tym, po czym sie szuka.
   await db.prepare(
-    "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
-  ).bind(token, userId, t, t + SESSION_DAYS * 864e5).run();
+    "INSERT INTO sessions (token, token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?,?)",
+  ).bind(token, await tokenHash(token), userId, t, t + SESSION_DAYS * 864e5).run();
   return token;
 }
 
@@ -212,17 +233,44 @@ function cookieToken(request) {
   return null;
 }
 
+/* Sesje: najpierw szukamy po skrocie, a jawna kolumna to wczesniejszy etap
+   tej samej migracji. Wiersze sprzed migracji maja token_hash NULL, wiec
+   trzeba je obsluzyc — i przy okazji uzupelnić, bo i tak czytamy token.
+   Self-healing: zamiast jednego UPDATE po tabeli, kazda stara sesja
+   przepisuje sie sama przy pierwszym uzyciu, a wiersze ktorych nikt nie
+   uzyje nie maja skrotu i nie zajmuja indeksu. */
+async function findSession(db, token) {
+  const hash = await tokenHash(token);
+  const byHash = await db.prepare(
+    `SELECT u.id, u.handle, u.email, u.created_at, s.expires_at
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ?`,
+  ).bind(hash).first();
+  if (byHash) return byHash;
+
+  const legacy = await db.prepare(
+    `SELECT s.token, u.id, u.handle, u.email, u.created_at, s.expires_at
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token = ? AND s.token_hash IS NULL`,
+  ).bind(token).first();
+  if (!legacy) return null;
+
+  await db.prepare("UPDATE sessions SET token_hash = ? WHERE token = ?").bind(hash, token).run();
+  return legacy;
+}
+
+async function dropSession(db, token) {
+  const hash = await tokenHash(token);
+  await db.prepare("DELETE FROM sessions WHERE token_hash = ? OR token = ?").bind(hash, token).run();
+}
+
 async function currentUser(request, env) {
   const token = cookieToken(request);
   if (!token) return null;
-  const row = await env.DB.prepare(
-    `SELECT u.id, u.handle, u.email, u.created_at, s.expires_at
-       FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.token = ?`,
-  ).bind(token).first();
+  const row = await findSession(env.DB, token);
   if (!row) return null;
   if (row.expires_at < now()) {
-    await env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+    await dropSession(env.DB, token);
     return null;
   }
   return { id: row.id, handle: row.handle, email: row.email, created_at: row.created_at };
@@ -300,8 +348,13 @@ const verifyLink = (token) => `https://edu.hartwell-labs.pl/verify?token=${token
 
 async function sendVerification(env, user) {
   const token = randHex(24);
-  await env.DB.prepare("UPDATE users SET verify_token = ?, verify_sent_at = ? WHERE id = ?")
-    .bind(token, now(), user.id).run();
+  // Dual-write, jak przy sesjach: jawny token zostaje do migracji CONTRACT.
+  // Kazde ponowne wyslanie kasuje poprzedni skrot, inaczej stary token
+  // wyginalby dopiero po wygenerowaniu nowego, a nie w 24h od ostatniego
+  // wyslania.
+  await env.DB.prepare(
+    "UPDATE users SET verify_token = ?, verify_token_hash = ?, verify_sent_at = ? WHERE id = ?",
+  ).bind(token, await tokenHash(token), now(), user.id).run();
   await sendMail(
     env, user.email, "Confirm your e-mail in Anvil",
     `Hi ${user.handle},\n\nConfirm your e-mail in Anvil — open the link:\n\n${verifyLink(token)}\n\n` +
@@ -394,7 +447,7 @@ async function login(request, env) {
 
 async function logout(request, env) {
   const token = cookieToken(request);
-  if (token) await env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+  if (token) await dropSession(env.DB, token);
   return json({ ok: true }, { headers: { "set-cookie": clearCookie() } });
 }
 
@@ -423,6 +476,58 @@ async function mergeProgress(env, userId, guestTasks) {
 }
 
 /* --------------------------------------------------------------- routing */
+// The 404 body. Deliberately its own markup rather than a redirect home: a
+// mistyped URL should say so, not silently land somewhere else. `path` is
+// reflected, so it is escaped — an unescaped request path would let anyone
+// inject markup into a page served from our origin.
+const NOT_FOUND_ICON = `<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+<link rel="manifest" href="/assets/site.webmanifest" />`;
+
+function escape_html(s) {
+  return String(s).replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+  );
+}
+
+function not_found_page(path) {
+  const shown = escape_html(path.length > 120 ? path.slice(0, 120) + "…" : path);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Page not found — Anvil</title>
+<meta name="description" content="That page does not exist on Anvil. Go back to the labs." />
+<meta name="robots" content="noindex" />
+<meta name="theme-color" content="#171514" />
+${NOT_FOUND_ICON}
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+<header>
+  <div class="container header-in">
+    <a class="brand" href="/"><span class="brand-mark">A</span><b>Anvil</b><span>interactive labs</span></a>
+  </div>
+</header>
+<main class="container">
+  <div class="vpage">
+    <p style="color:var(--ink-3); font-size:13px; letter-spacing:.08em; text-transform:uppercase;">404</p>
+    <h1 style="font-size:30px; margin:6px 0 12px;">No such page</h1>
+    <p style="color:var(--ink-2); font-size:15px; line-height:1.65;">
+      Nothing is published at <code style="font-family:var(--mono);">${shown}</code>.
+    </p>
+    <p style="margin-top:22px;">
+      <a class="btn btn-primary" href="/">All labs</a>
+      <a class="btn btn-ghost" href="/panel">Your progress</a>
+    </p>
+  </div>
+</main>
+</body>
+</html>`;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -444,10 +549,22 @@ export default {
           return new Response(res.body, { status: 200, headers: res.headers });
         }
         if (!/^[0-9a-f]{48}$/.test(token)) return json({ ok: false, error: "bad link" }, { status: 400 });
-        const row = await env.DB.prepare("SELECT id FROM users WHERE verify_token = ?").bind(token).first();
+        const vhash = await tokenHash(token);
+        // Najpierw skrot; jawna kolumna to wczesniejszy etap migracji i
+        // obsluga tokenow wystawionych przed nia.
+        let row = await env.DB.prepare("SELECT id FROM users WHERE verify_token_hash = ?").bind(vhash).first();
+        if (!row) {
+          row = await env.DB.prepare(
+            "SELECT id FROM users WHERE verify_token = ? AND verify_token_hash IS NULL",
+          ).bind(token).first();
+        }
         if (!row) return json({ ok: false, error: "the link expired or was already used" }, { status: 400 });
-        await env.DB.prepare("UPDATE users SET email_verified = 1, verify_token = NULL WHERE id = ?")
-          .bind(row.id).run();
+        // Oba zerwane, nie tylko jeden: inaczej skrot zostalby wskaznikiem do
+        // tokenu, ktorego juz nie da sie uzyc, a kolejne wyslanie nadpisuje
+        // go dopiero wtedy.
+        await env.DB.prepare(
+          "UPDATE users SET email_verified = 1, verify_token = NULL, verify_token_hash = NULL WHERE id = ?",
+        ).bind(row.id).run();
         return json({ ok: true });
       }
 
@@ -584,6 +701,18 @@ export default {
       h.set("x-content-type-options", "nosniff");
       h.set("referrer-policy", "strict-origin-when-cross-origin");
       h.set("strict-transport-security", "max-age=31536000; includeSubDomains");
+      // A miss used to return the assets binding's bare 404: no title, no icon,
+      // no way back. In a tab that reads as a blank page showing the raw URL —
+      // which is exactly what someone sees after a typo or an old link — so it
+      // gets the same head as every other page.
+      if (res.status === 404 && !p.startsWith("/api/")) {
+        // The binding answers a miss with text/plain; handing that back with
+        // our HTML body makes the browser render it as a code listing, so the
+        // type has to be corrected along with the status.
+        h.set("content-type", "text/html; charset=utf-8");
+        h.set("cache-control", "no-store, must-revalidate");
+        return new Response(not_found_page(p), { status: 404, headers: h });
+      }
       // The app shell and the engine change often, and a stale copy in a browser or
       // at the edge is worse than a revalidation round-trip. The 12 MB Pyodide
       // runtime keeps its long cache — that is the only thing worth caching hard.
