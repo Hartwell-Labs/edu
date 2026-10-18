@@ -528,6 +528,18 @@ ${NOT_FOUND_ICON}
 </html>`;
 }
 
+// Media types whose bytes are text and therefore need an explicit charset.
+// image/*, font/* and video/* are excluded on purpose: their bytes are binary
+// and declaring utf-8 on them is at best noise.
+const TEXTUAL = /^(?:text\/|application\/(?:json|javascript|xml|xhtml\+xml|manifest\+json|x-www-form-urlencoded)|image\/svg\+xml)/i;
+
+function with_charset(content_type, headers) {
+  if (!content_type) return;
+  if (/charset=/i.test(content_type)) return;
+  if (!TEXTUAL.test(content_type)) return;
+  headers.set("content-type", `${content_type}; charset=utf-8`);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -713,6 +725,16 @@ export default {
         h.set("cache-control", "no-store, must-revalidate");
         return new Response(not_found_page(p), { status: 404, headers: h });
       }
+
+      // The assets binding answers "text/html", "text/markdown", "text/css",
+      // "application/json" and so on with no charset parameter. HTML survives
+      // because its <meta charset> arrives before any non-ASCII byte, but
+      // nothing else carries one: a markdown page, a stylesheet or a JSON file
+      // is decoded on a guess, and accented characters come out as mojibake.
+      // That is why only some pages looked broken. The declaration belongs in
+      // the header, where it applies to every response including ones with no
+      // markup at all.
+      with_charset(h.get("content-type"), h);
       // The app shell and the engine change often, and a stale copy in a browser or
       // at the edge is worse than a revalidation round-trip. The 12 MB Pyodide
       // runtime keeps its long cache — that is the only thing worth caching hard.
